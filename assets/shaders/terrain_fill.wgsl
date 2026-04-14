@@ -1,5 +1,6 @@
 #import bevy_ecs_tilemap::common::{tilemap_data, sprite_texture, sprite_sampler}
 #import bevy_ecs_tilemap::vertex_output::MeshVertexOutput
+#import bevy_sprite::mesh2d_view_bindings::globals
 
 // ── Bindings ────────────────────────────────────────────────────────────────
 
@@ -549,11 +550,11 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     let local = vec2(in.uv.z, 1.0 - in.uv.w); // x=left→right, y=bottom→top
     var base: vec4<f32>;
     if here == ID_RIVER {
-        base = fill_river_with_depth(world_px, tilemap_data.time, tc, local);
+        base = fill_river_with_depth(world_px, globals.time, tc, local);
     } else if here == ID_SHALLOWS {
-        base = fill_shallows(world_px, tilemap_data.time, tc, local);
+        base = fill_shallows(world_px, globals.time, tc, local);
     } else {
-        base = terrain_fill(here, world_px, tilemap_data.time);
+        base = terrain_fill(here, world_px, globals.time);
     }
     base.a = 1.0;
 
@@ -606,66 +607,66 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     // Cardinal edges
     if bn {
         let sdf = sdf_cardinal(tx, ty, 0u) + noise;
-        let c = eval_transition(here, id_n, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_n, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if bs {
         let sdf = sdf_cardinal(tx, ty, 1u) + noise;
-        let c = eval_transition(here, id_s, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_s, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if be {
         let sdf = sdf_cardinal(tx, ty, 2u) + noise;
-        let c = eval_transition(here, id_e, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_e, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if bw {
         let sdf = sdf_cardinal(tx, ty, 3u) + noise;
-        let c = eval_transition(here, id_w, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_w, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
 
     // Convex corners — skip when both adjacent cardinals are wide blends
     if bn && be && !(is_wide_blend(here, id_n) && is_wide_blend(here, id_e)) {
         let sdf = sdf_corner(tx, ty, 0u) + noise;
-        let c = eval_transition(here, id_ne, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_ne, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if bn && bw && !(is_wide_blend(here, id_n) && is_wide_blend(here, id_w)) {
         let sdf = sdf_corner(tx, ty, 1u) + noise;
-        let c = eval_transition(here, id_nw, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_nw, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if bs && be && !(is_wide_blend(here, id_s) && is_wide_blend(here, id_e)) {
         let sdf = sdf_corner(tx, ty, 2u) + noise;
-        let c = eval_transition(here, id_se, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_se, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if bs && bw && !(is_wide_blend(here, id_s) && is_wide_blend(here, id_w)) {
         let sdf = sdf_corner(tx, ty, 3u) + noise;
-        let c = eval_transition(here, id_sw, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_sw, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
 
     // Concave corners — skip for wide blends
     if !bn && !be && bne && !is_wide_blend(here, id_ne) {
         let sdf = sdf_corner(tx, ty, 4u) + noise;
-        let c = eval_transition(here, id_ne, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_ne, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if !bn && !bw && bnw && !is_wide_blend(here, id_nw) {
         let sdf = sdf_corner(tx, ty, 5u) + noise;
-        let c = eval_transition(here, id_nw, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_nw, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if !bs && !be && bse && !is_wide_blend(here, id_se) {
         let sdf = sdf_corner(tx, ty, 6u) + noise;
-        let c = eval_transition(here, id_se, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_se, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
     if !bs && !bw && bsw && !is_wide_blend(here, id_sw) {
         let sdf = sdf_corner(tx, ty, 7u) + noise;
-        let c = eval_transition(here, id_sw, sdf, world_px, bf, tilemap_data.time);
+        let c = eval_transition(here, id_sw, sdf, world_px, bf, globals.time);
         accum_color += c.rgb; accum_weight += c.a;
     }
 
