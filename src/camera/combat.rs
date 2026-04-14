@@ -159,6 +159,7 @@ pub struct BillboardLayerOffset(pub f32);
 pub fn setup_billboard_tiles(
     mut commands: Commands,
     mut billboard_ready: ResMut<BillboardTilesReady>,
+    asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut std_materials: ResMut<Assets<StandardMaterial>>,
@@ -497,11 +498,142 @@ pub fn setup_billboard_tiles(
                         quad_w, quad_h, origin_px_x, origin_px_y,
                     );
 
-                    let mat = std_materials.add(StandardMaterial {
-                        base_color_texture: Some(images.add(comp_image)),
-                        unlit: true,
-                        alpha_mode: AlphaMode::Mask(0.1),
-                        double_sided: true, cull_mode: None, ..default()
+                    // Try to load normal and depth maps for this tileset
+                    let tileset_name = name_str
+                        .strip_prefix("TiledTilemap(")
+                        .and_then(|s| s.strip_suffix(')'))
+                        .and_then(|s| s.rsplit_once(", "))
+                        .map(|(_, ts_name)| ts_name)
+                        .unwrap_or("");
+                    let normal_path = format!("tilesets/{}_normal.png", tileset_name);
+                    let depth_path = format!("tilesets/{}_depth.png", tileset_name);
+
+                    // Check if normal/depth map files exist
+                    let has_normal = std::path::Path::new(&format!("assets/{}", normal_path)).exists();
+                    let has_depth = std::path::Path::new(&format!("assets/{}", depth_path)).exists();
+
+                    // Composite normal and depth maps using the same tile layout
+                    let normal_handle = if has_normal {
+                        let normal_atlas: Handle<Image> = asset_server.load(&normal_path);
+                        if let Some(normal_img) = images.get(&normal_atlas) {
+                            let normal_data = normal_img.data.clone().unwrap_or_default();
+                            let normal_w = normal_img.texture_descriptor.size.width;
+                            let normal_bpp = 4u32; // RGBA
+                            let normal_cols = (normal_w as f32 / ts.x).round() as u32;
+
+                            // Composite normal map using same tile grid
+                            let mut norm_pixels = vec![128u8; (comp_w * trimmed_h * 4) as usize];
+                            // Set default flat normal (128, 128, 255, 255)
+                            for chunk in norm_pixels.chunks_exact_mut(4) {
+                                chunk[0] = 128; chunk[1] = 128; chunk[2] = 255; chunk[3] = 255;
+                            }
+                            for ty in 0..rect_h {
+                                for tx in 0..rect_w {
+                                    let Some(tile_idx) = grid[(min_y + ty) * w + (min_x + tx)] else { continue };
+                                    let ac = tile_idx % normal_cols;
+                                    let ar = tile_idx / normal_cols;
+                                    let src_x0 = ac * tile_w;
+                                    let src_y0 = ar * tile_h;
+                                    let dst_y0 = (rect_h as u32 - 1 - ty as u32) * tile_h;
+                                    // Only copy rows within trimmed height
+                                    for py in 0..tile_h {
+                                        let dst_row = dst_y0 + py;
+                                        if dst_row >= trimmed_h { continue; }
+                                        let s = ((src_y0 + py) * normal_w + src_x0) * normal_bpp;
+                                        let d = (dst_row * comp_w + tx as u32 * tile_w) * 4;
+                                        let ss = s as usize;
+                                        let se = ss + (tile_w * normal_bpp) as usize;
+                                        let dd = d as usize;
+                                        let de = dd + (tile_w * 4) as usize;
+                                        if se <= normal_data.len() && de <= norm_pixels.len() {
+                                            // Normal maps are RGB, copy as RGBA
+                                            for px in 0..tile_w as usize {
+                                                let si = ss + px * normal_bpp as usize;
+                                                let di = dd + px * 4;
+                                                if si + 2 < normal_data.len() && di + 3 < norm_pixels.len() {
+                                                    norm_pixels[di] = normal_data[si];
+                                                    norm_pixels[di + 1] = normal_data[si + 1];
+                                                    norm_pixels[di + 2] = normal_data[si + 2];
+                                                    norm_pixels[di + 3] = 255;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let norm_img = Image::new(
+                                Extent3d { width: comp_w, height: trimmed_h, depth_or_array_layers: 1 },
+                                TextureDimension::D2, norm_pixels,
+                                TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default(),
+                            );
+                            images.add(norm_img)
+                        } else {
+                            // Normal atlas not loaded yet — use flat normal
+                            create_flat_texture(&mut images, comp_w, trimmed_h, [128, 128, 255, 255])
+                        }
+                    } else {
+                        create_flat_texture(&mut images, comp_w, trimmed_h, [128, 128, 255, 255])
+                    };
+
+                    let depth_handle = if has_depth {
+                        let depth_atlas: Handle<Image> = asset_server.load(&depth_path);
+                        if let Some(depth_img) = images.get(&depth_atlas) {
+                            let depth_data = depth_img.data.clone().unwrap_or_default();
+                            let depth_w = depth_img.texture_descriptor.size.width;
+                            let depth_bpp = if depth_img.texture_descriptor.format == TextureFormat::R8Unorm { 1u32 } else { 4u32 };
+                            let depth_cols = (depth_w as f32 / ts.x).round() as u32;
+
+                            let mut dep_pixels = vec![0u8; (comp_w * trimmed_h * 4) as usize];
+                            for ty in 0..rect_h {
+                                for tx in 0..rect_w {
+                                    let Some(tile_idx) = grid[(min_y + ty) * w + (min_x + tx)] else { continue };
+                                    let ac = tile_idx % depth_cols;
+                                    let ar = tile_idx / depth_cols;
+                                    let src_x0 = ac * tile_w;
+                                    let src_y0 = ar * tile_h;
+                                    let dst_y0 = (rect_h as u32 - 1 - ty as u32) * tile_h;
+                                    for py in 0..tile_h {
+                                        let dst_row = dst_y0 + py;
+                                        if dst_row >= trimmed_h { continue; }
+                                        for px in 0..tile_w {
+                                            let si = ((src_y0 + py) * depth_w + src_x0 + px) as usize * depth_bpp as usize;
+                                            let di = ((dst_row * comp_w + tx as u32 * tile_w + px) * 4) as usize;
+                                            if si < depth_data.len() && di + 3 < dep_pixels.len() {
+                                                let v = depth_data[si];
+                                                dep_pixels[di] = v;
+                                                dep_pixels[di + 1] = v;
+                                                dep_pixels[di + 2] = v;
+                                                dep_pixels[di + 3] = 255;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            let dep_img = Image::new(
+                                Extent3d { width: comp_w, height: trimmed_h, depth_or_array_layers: 1 },
+                                TextureDimension::D2, dep_pixels,
+                                TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default(),
+                            );
+                            images.add(dep_img)
+                        } else {
+                            create_flat_texture(&mut images, comp_w, trimmed_h, [0, 0, 0, 255])
+                        }
+                    } else {
+                        create_flat_texture(&mut images, comp_w, trimmed_h, [0, 0, 0, 255])
+                    };
+
+                    let features = if has_normal && has_depth { 2.0 }
+                        else if has_normal { 1.0 }
+                        else { 0.0 };
+
+                    let mat = bb_materials.add(BillboardMaterial {
+                        base_texture: images.add(comp_image),
+                        normal_texture: normal_handle,
+                        depth_texture: depth_handle,
+                        params: BillboardParams {
+                            features,
+                            ..default()
+                        },
                     });
 
                     let bb_level = tile_elev.map_or(0, |e| e.level);
@@ -610,6 +742,19 @@ fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
         .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Create a small flat-color texture for use as a placeholder.
+fn create_flat_texture(images: &mut Assets<Image>, w: u32, h: u32, color: [u8; 4]) -> Handle<Image> {
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    for chunk in pixels.chunks_exact_mut(4) {
+        chunk.copy_from_slice(&color);
+    }
+    images.add(Image::new(
+        Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        TextureDimension::D2, pixels,
+        TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default(),
+    ))
 }
 
 fn is_terrain_layer(name: &str) -> bool {
