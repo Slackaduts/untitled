@@ -7,29 +7,46 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          inherit system;
-          config.allowUnfree = true;
-          config.cudaSupport = true;
-        };
+        pkgs = import nixpkgs { inherit system; };
       in {
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            (python3.withPackages (ps: with ps; [
-              torch
-              torchvision
-              transformers
-              pillow
-              numpy
-              scipy
-            ]))
-          ];
+        devShells = {
+          # CPU-only (fast to build, ~1-2s per sprite)
+          default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              (python3.withPackages (ps: with ps; [
+                torch
+                torchvision
+                transformers
+                pillow
+                numpy
+                scipy
+              ]))
+            ];
 
-          shellHook = ''
-            echo "AI map generation environment ready"
-            echo "Run: python ../../tools/generate_maps.py"
-            echo "  or: python ../../tools/generate_maps.py --force --model large"
-          '';
+            shellHook = ''
+              echo "AI map generation environment (CPU) ready"
+              echo "Run: python ../../tools/generate_maps.py"
+            '';
+          };
+
+          # CUDA (slow to build first time, ~0.1s per sprite)
+          cuda = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              (python3.withPackages (ps: with ps; [
+                torch
+                torchvision
+                transformers
+                pillow
+                numpy
+                scipy
+              ]))
+            ];
+
+            shellHook = ''
+              echo "AI map generation environment (CUDA) ready"
+              echo "Run: python ../../tools/generate_maps.py"
+            '';
+          };
         };
       });
 }

@@ -28,9 +28,12 @@ def load_depth_model(model_size="small"):
         "large": "depth-anything/Depth-Anything-V2-Large-hf",
     }.get(model_size, "depth-anything/Depth-Anything-V2-Small-hf")
 
-    print(f"Loading model: {model_name}")
-    pipe = pipeline("depth-estimation", model=model_name, device=0)
-    print("Model loaded on GPU")
+    import torch
+    device = 0 if torch.cuda.is_available() else -1
+    device_name = "GPU (CUDA)" if device == 0 else "CPU"
+    print(f"Loading model: {model_name} on {device_name}")
+    pipe = pipeline("depth-estimation", model=model_name, device=device)
+    print(f"Model loaded on {device_name}")
     return pipe
 
 
