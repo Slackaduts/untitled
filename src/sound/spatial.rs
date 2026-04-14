@@ -27,13 +27,13 @@ pub struct GameListener;
 /// Each frame, adjust the volume of spatial emitters based on distance to the listener.
 pub fn update_spatial_falloff(
     listener_q: Query<&Transform, With<GameListener>>,
-    mut emitter_q: Query<(&Transform, &SpatialFalloff, &AudioSink)>,
+    mut emitter_q: Query<(&Transform, &SpatialFalloff, &mut AudioSink)>,
 ) {
     let Some(listener_tf) = listener_q.iter().next() else {
         return;
     };
 
-    for (emitter_tf, falloff, sink) in &mut emitter_q {
+    for (emitter_tf, falloff, mut sink) in &mut emitter_q {
         let distance = listener_tf
             .translation
             .truncate()
@@ -48,6 +48,6 @@ pub fn update_spatial_falloff(
                 / (falloff.outer_radius - falloff.inner_radius)
         };
 
-        sink.set_volume(volume);
+        sink.set_volume(bevy::audio::Volume::Linear(volume));
     }
 }

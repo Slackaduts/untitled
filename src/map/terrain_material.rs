@@ -1,6 +1,7 @@
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, Extent3d, ShaderRef, ShaderType, TextureDimension, TextureFormat};
+use bevy::render::render_resource::{AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat};
+use bevy::shader::ShaderRef;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_ecs_tiled::prelude::*;
 
@@ -141,8 +142,8 @@ pub fn build_terrain_and_attach_material(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     new_layers: Query<
-        (Entity, &Name, &TileStorage, &TilemapSize, &Parent),
-        (With<TiledMapTileLayerForTileset>, Without<TerrainTypeMapReady>),
+        (Entity, &Name, &TileStorage, &TilemapSize, &ChildOf),
+        (With<TiledTilemap>, Without<TerrainTypeMapReady>),
     >,
     tile_indices: Query<&TileTextureIndex>,
     mut images: ResMut<Assets<Image>>,
@@ -189,7 +190,7 @@ pub fn build_terrain_and_attach_material(
         }
 
         layer_groups
-            .entry((parent.get(), elev_level))
+            .entry((parent.parent(), elev_level))
             .or_default()
             .push((entity, name, storage, size));
     }
@@ -205,7 +206,7 @@ pub fn build_terrain_and_attach_material(
             let name_str = name.as_str();
 
             let tileset_name = name_str
-                .strip_prefix("TiledMapTileLayerForTileset(")
+                .strip_prefix("TiledTilemap(")
                 .and_then(|s| s.strip_suffix(')'))
                 .and_then(|s| s.rsplit_once(", "))
                 .map(|(_, ts)| ts)
@@ -276,7 +277,7 @@ pub fn build_terrain_and_attach_material(
             // Only apply terrain material to terrain-related tileset layers
             let name_str = name.as_str();
             let tileset_name = name_str
-                .strip_prefix("TiledMapTileLayerForTileset(")
+                .strip_prefix("TiledTilemap(")
                 .and_then(|s| s.strip_suffix(')'))
                 .and_then(|s| s.rsplit_once(", "))
                 .map(|(_, ts)| ts)

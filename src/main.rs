@@ -10,7 +10,7 @@ fn main() {
                 .set(WindowPlugin {
                     primary_window: Some(Window {
                         title: "Untitled JRPG".into(),
-                        resolution: (1280.0, 720.0).into(),
+                        resolution: bevy::window::WindowResolution::new(1280, 720),
                         present_mode: PresentMode::Immediate,
                         ..default()
                     }),

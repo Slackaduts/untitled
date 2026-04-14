@@ -37,7 +37,7 @@ pub struct LightUniformData {
     pub screen_size: Vec2,
     pub num_lights: u32,
     pub _pad: u32,
-    #[size(runtime)]
+    #[shader(size(runtime))]
     pub lights: Vec<GpuLight>,
 }
 
@@ -63,7 +63,7 @@ pub fn extract_light_data(
 ) {
     extracted.lights.clear();
 
-    let Ok((camera, cam_tf)) = cameras.get_single() else {
+    let Ok((camera, cam_tf)) = cameras.single() else {
         return;
     };
 

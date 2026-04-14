@@ -59,11 +59,11 @@ pub struct TileLightParented;
 /// world positions.
 pub fn spawn_lights_from_tile_properties(
     mut commands: Commands,
-    map_assets: Res<Assets<TiledMap>>,
-    map_handles: Query<&TiledMapHandle>,
+    map_assets: Res<Assets<TiledMapAsset>>,
+    map_handles: Query<&TiledMap>,
     new_layers: Query<
         (Entity, &Name, &TileStorage, &TilemapSize, &TilemapTileSize),
-        (With<TiledMapTileLayerForTileset>, Without<TileLightsProcessed>),
+        (With<TiledTilemap>, Without<TileLightsProcessed>),
     >,
     tile_indices: Query<&TileTextureIndex>,
 ) {
@@ -85,7 +85,7 @@ pub fn spawn_lights_from_tile_properties(
     for (layer_entity, name, storage, size, tile_size) in &new_layers {
         let tileset_name = name
             .as_str()
-            .strip_prefix("TiledMapTileLayerForTileset(")
+            .strip_prefix("TiledTilemap(")
             .and_then(|s| s.strip_suffix(')'))
             .and_then(|s| s.rsplit_once(", "))
             .map(|(_, ts)| ts);
@@ -203,12 +203,11 @@ pub fn parent_tile_lights_to_billboards(
             let local_x = tile_light.world_pos.x - quad_translation.x;
             let local_y = tile_light.world_pos.y - quad_translation.y;
 
-            commands.entity(light_entity).insert(TileLightParented);
-            commands.entity(light_entity).set_parent(quad_entity);
-            // Set local transform relative to the quad
-            commands.entity(light_entity).insert(
+            commands.entity(light_entity).insert((
+                TileLightParented,
+                ChildOf(quad_entity),
                 Transform::from_xyz(local_x, local_y, 0.0),
-            );
+            ));
         } else {
             // No billboard quads exist — mark as parented to skip future checks
             commands.entity(light_entity).insert(TileLightParented);
@@ -220,7 +219,7 @@ pub fn parent_tile_lights_to_billboards(
 /// Parse tileset tiles that have `user_type == "TileLight"` and extract
 /// their custom properties into `TileLightDef`s.
 pub fn collect_tile_light_defs<'a>(
-    map: &'a tiled::Map,
+    map: &'a bevy_ecs_tiled::prelude::tiled::Map,
 ) -> HashMap<(&'a str, u32), TileLightDef> {
     let mut defs = HashMap::new();
 
@@ -252,7 +251,7 @@ pub fn collect_tile_light_defs<'a>(
             };
 
             for (name, value) in &tile_data.properties {
-                use tiled::PropertyValue::*;
+                use bevy_ecs_tiled::prelude::tiled::PropertyValue::*;
                 match (name.as_str(), value) {
                     ("radius", FloatValue(v)) => def.radius = *v,
                     ("radius", IntValue(v)) => def.radius = *v as f32,

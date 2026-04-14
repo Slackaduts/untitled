@@ -15,8 +15,8 @@ pub(crate) struct EdgeCollidersGenerated;
 pub fn generate_edge_colliders(
     mut commands: Commands,
     layers: Query<
-        (Entity, &TileStorage, &TilemapSize, &TilemapTileSize, &Name, &Parent),
-        (With<TerrainTypeMapReady>, With<TiledMapTileLayerForTileset>, Without<EdgeCollidersGenerated>),
+        (Entity, &TileStorage, &TilemapSize, &TilemapTileSize, &Name, &ChildOf),
+        (With<TerrainTypeMapReady>, With<TiledTilemap>, Without<EdgeCollidersGenerated>),
     >,
     tile_indices: Query<&TileTextureIndex>,
 ) {
@@ -25,12 +25,12 @@ pub fn generate_edge_colliders(
 
     for (entity, _storage, map_size, tile_size, name, parent) in &layers {
         let entry = parent_data
-            .entry(parent.get())
+            .entry(parent.parent())
             .or_insert((map_size.x, map_size.y, tile_size.x, tile_size.y, Vec::new()));
         entry.4.push((entity, name.as_str().to_string()));
     }
 
-    let mut seen_parents: bevy::utils::HashSet<Entity> = bevy::utils::HashSet::new();
+    let mut seen_parents: std::collections::HashSet<Entity> = std::collections::HashSet::new();
 
     for (parent_entity, (map_w, map_h, tile_w, tile_h, siblings)) in &parent_data {
         if !seen_parents.insert(*parent_entity) {
@@ -47,7 +47,7 @@ pub fn generate_edge_colliders(
             let Ok((_, storage, _, _, _, _)) = layers.get(*entity) else { continue };
 
             let tileset_name = name_str
-                .strip_prefix("TiledMapTileLayerForTileset(")
+                .strip_prefix("TiledTilemap(")
                 .and_then(|s| s.strip_suffix(')'))
                 .and_then(|s| s.rsplit_once(", "))
                 .map(|(_, ts)| ts)

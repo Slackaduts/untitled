@@ -100,7 +100,7 @@ pub fn compute_slope_height_maps(
     config: Res<ElevationConfig>,
     slope_layers: Query<
         (&SlopeLayer, &TileStorage, &TilemapSize, &TilemapTileSize),
-        (With<TerrainTypeMapReady>, With<TiledMapTileLayerForTileset>,
+        (With<TerrainTypeMapReady>, With<TiledTilemap>,
          Added<SlopeLayer>),
     >,
     tile_indices: Query<&TileTextureIndex>,
@@ -306,7 +306,7 @@ pub fn chop_plateau_colliders(
         let pos = tf.translation;
 
         // Get the collider's AABB in tile coordinates
-        let aabb = collider.shape_scaled().compute_aabb(&avian3d::parry::math::Isometry::identity());
+        let aabb = collider.shape_scaled().compute_aabb(&avian3d::parry::math::Pose::identity());
         let min_tx = ((pos.x + aabb.mins.x) / tile).floor() as i32;
         let max_tx = ((pos.x + aabb.maxs.x) / tile).ceil() as i32;
         let min_ty = ((pos.y + aabb.mins.y) / tile).floor() as i32;

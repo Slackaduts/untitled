@@ -71,7 +71,7 @@ pub fn ensure_texture_registered(
     if state.tileset_textures.contains_key(&info.name) {
         return;
     }
-    let Some(_ctx) = contexts.try_ctx_mut() else {
+    let Ok(_ctx) = contexts.ctx_mut() else {
         return;
     };
     // Build path relative to assets/ for the asset server
@@ -84,7 +84,7 @@ pub fn ensure_texture_registered(
         .or_else(|_| full_path.strip_prefix("assets"))
         .unwrap_or(&full_path);
     let handle: Handle<Image> = asset_server.load(asset_path.to_path_buf());
-    let id = contexts.add_image(handle);
+    let id = contexts.add_image(bevy_egui::EguiTextureHandle::Strong(handle));
     state.tileset_textures.insert(info.name.clone(), id);
 }
 
@@ -92,8 +92,8 @@ pub fn tileset_editor_section(
     ui: &mut egui::Ui,
     state: &mut TilesetEditorState,
     _asset_server: &AssetServer,
-    _map_assets: &Assets<TiledMap>,
-    _map_handles: &Query<(Entity, &TiledMapHandle)>,
+    _map_assets: &Assets<TiledMapAsset>,
+    _map_handles: &Query<(Entity, &TiledMap)>,
     _commands: &mut Commands,
 ) {
     ui.heading("Tileset Lights");

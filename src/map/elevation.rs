@@ -1,11 +1,10 @@
 use bevy::prelude::*;
-use bevy::render::camera::RenderTarget;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
-use bevy::render::render_asset::RenderAssetUsages;
+use bevy::camera::{RenderTarget, visibility::RenderLayers};
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_resource::{
     Extent3d, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages,
 };
-use bevy::render::view::RenderLayers;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_ecs_tiled::prelude::*;
 
@@ -81,7 +80,7 @@ pub enum LayerKind {
 ///   `terrain_N_customY`  → level N, CustomWall(wall_height=Y)
 pub fn parse_elevation_from_layer_name(name: &str) -> Option<(u8, LayerKind)> {
     let tiled_layer_name = name
-        .strip_prefix("TiledMapTileLayerForTileset(")
+        .strip_prefix("TiledTilemap(")
         .and_then(|s| s.strip_suffix(')'))
         .and_then(|s| s.rsplit_once(", "))
         .map(|(layer, _tileset)| layer)
@@ -122,7 +121,7 @@ pub fn setup_elevation_meshes(
     slope_maps: Res<super::slope::SlopeHeightMaps>,
     layers: Query<
         (Entity, &TileElevation, &TileStorage, &TilemapSize, &TilemapTileSize),
-        (With<TerrainTypeMapReady>, With<TiledMapTileLayerForTileset>,
+        (With<TerrainTypeMapReady>, With<TiledTilemap>,
          Without<ElevationMeshReady>, Without<SlopeLayer>),
     >,
 ) {
@@ -208,19 +207,19 @@ pub fn setup_elevation_meshes(
             Camera2d,
             Camera {
                 order: -(level as isize) - 10,
-                target: RenderTarget::Image(rt_handle.clone()),
                 clear_color: ClearColorConfig::Custom(Color::srgba(0.0, 0.0, 0.0, 0.0)),
                 ..default()
             },
-            OrthographicProjection {
+            RenderTarget::Image(rt_handle.clone().into()),
+            Projection::Orthographic(OrthographicProjection {
                 near: -1000.0,
                 far: 1000.0,
-                scaling_mode: bevy::render::camera::ScalingMode::Fixed {
+                scaling_mode: bevy::camera::ScalingMode::Fixed {
                     width: map_w,
                     height: map_h,
                 },
                 ..OrthographicProjection::default_2d()
-            },
+            }),
             Transform::from_xyz(map_center.x, map_center.y, 0.0),
             RenderLayers::layer(rl),
             ElevationRenderCam { level },

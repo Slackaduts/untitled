@@ -25,6 +25,6 @@ pub struct ScriptingPlugin;
 impl Plugin for ScriptingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LuaVm>()
-            .add_event::<event_bridge::LuaCommand>();
+            .add_message::<event_bridge::LuaCommand>();
     }
 }

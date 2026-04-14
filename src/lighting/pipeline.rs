@@ -1,10 +1,11 @@
 use bevy::prelude::*;
-use bevy::core_pipeline::fullscreen_vertex_shader::fullscreen_shader_vertex_state;
+use bevy::core_pipeline::FullscreenShader;
 use bevy::render::render_resource::{
-    BindGroupLayout, BindGroupLayoutEntry, BindingType, BufferBindingType, CachedRenderPipelineId,
-    ColorTargetState, ColorWrites, FragmentState, MultisampleState, PipelineCache,
-    PrimitiveState, RenderPipelineDescriptor, Sampler, SamplerBindingType, SamplerDescriptor,
-    ShaderStages, TextureFormat, TextureSampleType, TextureViewDimension,
+    BindGroupLayout, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingType,
+    BufferBindingType, CachedRenderPipelineId, ColorTargetState, ColorWrites, FragmentState,
+    MultisampleState, PipelineCache, PrimitiveState, RenderPipelineDescriptor, Sampler,
+    SamplerBindingType, SamplerDescriptor, ShaderStages, TextureFormat, TextureSampleType,
+    TextureViewDimension,
 };
 use bevy::render::renderer::RenderDevice;
 
@@ -22,8 +23,7 @@ impl FromWorld for LightingPipeline {
     fn from_world(world: &mut World) -> Self {
         let render_device = world.resource::<RenderDevice>();
 
-        // Group 0: HDR source texture + sampler (recreated per-frame in the node)
-        let texture_layout = render_device.create_bind_group_layout(
+        let texture_layout_descriptor = BindGroupLayoutDescriptor::new(
             "lighting_texture_bgl",
             &[
                 // @binding(0) var hdr_texture: texture_2d<f32>
@@ -47,8 +47,7 @@ impl FromWorld for LightingPipeline {
             ],
         );
 
-        // Group 1: light uniform buffer (prepared each frame)
-        let uniform_layout = render_device.create_bind_group_layout(
+        let uniform_layout_descriptor = BindGroupLayoutDescriptor::new(
             "lighting_uniform_bgl",
             &[
                 // @binding(0) var<storage, read> light_data: LightUniformData
@@ -65,25 +64,38 @@ impl FromWorld for LightingPipeline {
             ],
         );
 
+        // Create actual BindGroupLayouts for use in the render node bind groups
+        let texture_layout = render_device.create_bind_group_layout(
+            "lighting_texture_bgl",
+            &texture_layout_descriptor.entries,
+        );
+        let uniform_layout = render_device.create_bind_group_layout(
+            "lighting_uniform_bgl",
+            &uniform_layout_descriptor.entries,
+        );
+
         let sampler = render_device.create_sampler(&SamplerDescriptor::default());
 
         let shader = world.load_asset(LIGHTING_SHADER);
+
+        let fullscreen_shader = world.resource::<FullscreenShader>();
+        let vertex = fullscreen_shader.to_vertex_state();
 
         let pipeline_id =
             world
                 .resource_mut::<PipelineCache>()
                 .queue_render_pipeline(RenderPipelineDescriptor {
                     label: Some("lighting_post_pipeline".into()),
-                    layout: vec![texture_layout.clone(), uniform_layout.clone()],
+                    layout: vec![texture_layout_descriptor, uniform_layout_descriptor],
                     push_constant_ranges: Vec::new(),
-                    vertex: fullscreen_shader_vertex_state(),
+                    vertex,
                     primitive: PrimitiveState::default(),
                     depth_stencil: None,
                     multisample: MultisampleState::default(),
                     fragment: Some(FragmentState {
                         shader,
                         shader_defs: Vec::new(),
-                        entry_point: "fragment".into(),
+                        entry_point: Some("fragment".into()),
                         targets: vec![Some(ColorTargetState {
                             format: TextureFormat::bevy_default(),
                             blend: None,

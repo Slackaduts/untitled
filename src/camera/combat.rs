@@ -7,7 +7,7 @@ use bevy::render::render_resource::{
 };
 use bevy::shader::ShaderRef;
 use bevy_ecs_tilemap::prelude::*;
-use bevy_ecs_tiled::prelude::TiledMapTileLayerForTileset;
+use bevy_ecs_tiled::prelude::TiledTilemap;
 
 use super::CombatCamera3d;
 use crate::billboard::properties::BillboardProperties;
@@ -42,9 +42,9 @@ impl Material for BillboardMaterial {
     }
 
     fn specialize(
-        _pipeline: &bevy::pbr::MaterialPipeline<Self>,
+        _pipeline: &bevy::pbr::MaterialPipeline,
         descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
-        _layout: &bevy::render::mesh::MeshVertexBufferLayoutRef,
+        _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
         _key: bevy::pbr::MaterialPipelineKey<Self>,
     ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
         descriptor.primitive.cull_mode = None;
@@ -134,7 +134,7 @@ pub fn setup_billboard_tiles(
     tilemap_layers: Query<
         (Entity, &Name, &TileStorage, &TilemapSize, &TilemapTileSize,
          Option<&crate::map::elevation::TileElevation>),
-        With<TiledMapTileLayerForTileset>,
+        With<TiledTilemap>,
     >,
     tile_data: Query<(&TilePos, &TileTextureIndex)>,
     tilemap_textures: Query<&TilemapTexture>,
@@ -198,7 +198,7 @@ pub fn setup_billboard_tiles(
                 }
 
                 // Atlas pixels for compositing
-                let atlas_pixels = images.get(&texture_handle).unwrap().data.clone();
+                let atlas_pixels = images.get(&texture_handle).unwrap().data.clone().unwrap_or_default();
                 let atlas_w = images.get(&texture_handle).unwrap().texture_descriptor.size.width;
                 let atlas_bpp = 4u32;
 
@@ -376,7 +376,7 @@ pub fn setup_billboard_tiles(
                     // Look up billboard properties for the origin tile
                     // (bottom-center of the mosaic)
                     let tileset_name = name_str
-                        .strip_prefix("TiledMapTileLayerForTileset(")
+                        .strip_prefix("TiledTilemap(")
                         .and_then(|s| s.strip_suffix(')'))
                         .and_then(|s| s.rsplit_once(", "))
                         .map(|(_, ts_name)| ts_name)
@@ -581,7 +581,7 @@ fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
 
 fn is_terrain_layer(name: &str) -> bool {
     if let Some(inner) = name
-        .strip_prefix("TiledMapTileLayerForTileset(")
+        .strip_prefix("TiledTilemap(")
         .and_then(|s| s.strip_suffix(')'))
     {
         if let Some((layer_name, _)) = inner.rsplit_once(", ") {
@@ -758,7 +758,7 @@ pub fn compute_combat_grid(
     actor_positions: &[Vec2],
     tilemap_layers: &Query<
         (Entity, &Name, &TileStorage, &TilemapSize, &TilemapTileSize),
-        With<TiledMapTileLayerForTileset>,
+        With<TiledTilemap>,
     >,
     tile_data: &Query<(&TilePos, &TileTextureIndex)>,
 ) -> (IVec2, UVec2) {
@@ -794,7 +794,7 @@ pub fn compute_combat_grid(
 
         // Parse tileset name to classify tiles
         let tileset_name = name_str
-            .strip_prefix("TiledMapTileLayerForTileset(")
+            .strip_prefix("TiledTilemap(")
             .and_then(|s| s.strip_suffix(')'))
             .and_then(|s| s.rsplit_once(", "))
             .map(|(_, ts)| ts)

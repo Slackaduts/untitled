@@ -45,7 +45,7 @@ fn spawn_dev_scene(
 ) {
     // ── Tiled map ────────────────────────────────────────────────────
     commands.spawn((
-        TiledMapHandle(asset_server.load("maps/test.tmx")),
+        TiledMap(asset_server.load("maps/test.tmx")),
         TiledPhysicsSettings::<crate::map::tiled_physics_3d::TiledPhysics3dBackend>::default(),
     ));
 
@@ -135,7 +135,7 @@ fn toggle_combat_camera(
     tilemap_layers: Query<
         (Entity, &Name, &bevy_ecs_tilemap::prelude::TileStorage,
          &bevy_ecs_tilemap::prelude::TilemapSize, &bevy_ecs_tilemap::prelude::TilemapTileSize),
-        With<bevy_ecs_tiled::prelude::TiledMapTileLayerForTileset>,
+        With<bevy_ecs_tiled::prelude::TiledTilemap>,
     >,
     tile_data: Query<(&bevy_ecs_tilemap::prelude::TilePos, &bevy_ecs_tilemap::prelude::TileTextureIndex)>,
     slope_maps: Res<crate::map::slope::SlopeHeightMaps>,

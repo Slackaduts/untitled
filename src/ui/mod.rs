@@ -10,6 +10,6 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(bevy_egui::EguiPlugin);
+        app.add_plugins(bevy_egui::EguiPlugin::default());
     }
 }

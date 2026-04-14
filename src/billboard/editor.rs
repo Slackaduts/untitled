@@ -96,14 +96,14 @@ pub fn billboard_editor_system(
                     .unwrap_or(&full_path)
                     .to_path_buf();
                 let handle: Handle<Image> = asset_server.load(asset_path);
-                let id = contexts.add_image(handle.clone());
+                let id = contexts.add_image(bevy_egui::EguiTextureHandle::Strong(handle.clone()));
                 state.tileset_image_handles.insert(tsx_key.clone(), handle);
                 state.tileset_textures.insert(tsx_key, id);
             }
         }
     }
 
-    let Some(ctx) = contexts.try_ctx_mut() else { return };
+    let Ok(ctx) = contexts.ctx_mut() else { return };
     let state = &mut *state;
 
     egui::Window::new("Billboard Properties")

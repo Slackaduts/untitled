@@ -28,7 +28,7 @@ impl ViewNode for LightingNode {
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext<'w>,
-        view_target: QueryItem<'w, Self::ViewQuery>,
+        view_target: QueryItem<'w, '_, Self::ViewQuery>,
         world: &'w World,
     ) -> Result<(), NodeRunError> {
         let pipeline_res = world.resource::<LightingPipeline>();
@@ -81,6 +81,7 @@ impl ViewNode for LightingNode {
                         view: post_process.destination,
                         resolve_target: None,
                         ops: Operations::default(),
+                        depth_slice: None,
                     })],
                     depth_stencil_attachment: None,
                     timestamp_writes: None,

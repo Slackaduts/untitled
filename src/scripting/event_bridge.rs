@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 /// Commands pushed by Lua API calls, drained by Bevy systems in PostUpdate.
-#[derive(Event, Debug, Clone)]
+#[derive(Message, Debug, Clone)]
 pub enum LuaCommand {
     // Camera
     CameraPan { target: Vec2, duration: f32 },

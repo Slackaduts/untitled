@@ -16,9 +16,9 @@ pub mod uniforms;
 use bevy::core_pipeline::core_3d::graph::{Core3d, Node3d};
 use bevy::prelude::*;
 use bevy::render::extract_component::ExtractComponentPlugin;
-use bevy::render::render_graph::{RenderGraphApp, ViewNodeRunner};
+use bevy::render::render_graph::{RenderGraphExt, ViewNodeRunner};
 use bevy::render::render_resource::StorageBuffer;
-use bevy::render::{Render, RenderApp, RenderSet};
+use bevy::render::{Render, RenderApp, RenderSystems};
 
 use ambient::AmbientConfig;
 use components::LightSource;
@@ -89,7 +89,7 @@ impl Plugin for LightingPlugin {
             .add_systems(
                 Render,
                 uniforms::prepare_light_uniform
-                    .in_set(RenderSet::Prepare),
+                    .in_set(RenderSystems::Prepare),
             )
             .add_render_graph_node::<ViewNodeRunner<LightingNode>>(Core3d, LightingNodeLabel)
             .add_render_graph_edges(

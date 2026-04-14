@@ -74,9 +74,10 @@ pub fn lighting_debug_ui(
     let panel = panel.as_mut();
     panel.hovered_light = None;
 
+    let Ok(ctx) = contexts.ctx_mut() else { return };
     egui::Window::new("Lighting")
         .default_width(300.0)
-        .show(contexts.ctx_mut(), |ui| {
+        .show(ctx, |ui| {
             // ── Time of Day ─────────────────────────────────────────
             ui.heading("Time of Day");
             ui.horizontal(|ui| {
@@ -314,13 +315,14 @@ pub fn place_light_on_click(
         return;
     }
 
-    if contexts.ctx_mut().is_pointer_over_area() {
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    if ctx.is_pointer_over_area() {
         return;
     }
 
-    let Ok(window) = windows.get_single() else { return };
+    let Ok(window) = windows.single() else { return };
     let Some(cursor_pos) = window.cursor_position() else { return };
-    let Ok((camera, cam_tf)) = cameras.get_single() else { return };
+    let Ok((camera, cam_tf)) = cameras.single() else { return };
 
     let Ok(ray) = camera.viewport_to_world(cam_tf, cursor_pos) else { return };
     let Some(distance) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Z)) else {
@@ -365,10 +367,11 @@ pub fn draw_light_gizmos(
         return;
     }
 
-    let Ok(window) = windows.get_single() else { return };
-    let Ok((camera, cam_tf)) = cameras.get_single() else { return };
+    let Ok(window) = windows.single() else { return };
+    let Ok((camera, cam_tf)) = cameras.single() else { return };
     let cursor_pos = window.cursor_position();
-    let egui_wants_pointer = contexts.ctx_mut().is_pointer_over_area();
+    let Ok(ctx) = contexts.ctx_mut() else { return };
+    let egui_wants_pointer = ctx.is_pointer_over_area();
 
     // ── Draw icons and find pick target ─────────────────────────────
     let icon_world_radius = 8.0;
@@ -470,16 +473,11 @@ pub fn tileset_editor_system(
     mut contexts: EguiContexts,
     mut state: ResMut<super::tileset_editor::TilesetEditorState>,
     asset_server: Res<AssetServer>,
-    map_assets: Res<Assets<TiledMap>>,
-    map_handles: Query<(Entity, &TiledMapHandle)>,
+    map_assets: Res<Assets<TiledMapAsset>>,
+    map_handles: Query<(Entity, &TiledMap)>,
     mut commands: Commands,
 ) {
     if !panel.open || !panel.tileset_editor_open {
-        return;
-    }
-
-    // Guard: egui context may not be ready on all frames
-    if contexts.try_ctx_mut().is_none() {
         return;
     }
 
@@ -490,7 +488,7 @@ pub fn tileset_editor_system(
         &asset_server,
     );
 
-    let Some(ctx) = contexts.try_ctx_mut() else {
+    let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
 

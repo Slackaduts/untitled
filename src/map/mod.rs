@@ -27,7 +27,7 @@ pub struct MapPlugin;
 
 impl Plugin for MapPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(TiledMapPlugin::default())
+        app.add_plugins(TiledPlugin::default())
             .add_plugins(TiledPhysicsPlugin::<tiled_physics_3d::TiledPhysics3dBackend>::default())
             .add_plugins(PhysicsPlugins::default().with_length_unit(DEFAULT_TILE_SIZE))
             .add_plugins(PhysicsDebugPlugin::default())
