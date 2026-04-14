@@ -3,7 +3,7 @@ pub mod cutscene;
 pub mod follow;
 
 use bevy::audio::SpatialListener;
-use bevy::anti_alias::fxaa::Fxaa;
+use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
 
 use crate::app_state::GameState;
@@ -53,6 +53,7 @@ fn spawn_camera(mut commands: Commands) {
         GameListener,
         CombatCamera3d,
         LightingPostProcess,
-        Fxaa::default(),
+        Msaa::Off,
+        Smaa { preset: SmaaPreset::Ultra },
     ));
 }
