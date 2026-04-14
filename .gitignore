@@ -1,0 +1,6 @@
+.*
+__*
+!.gitignore
+!.direnv
+/target
+saves/

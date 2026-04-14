@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Wrapper to run tileconv.py with Pillow from nix
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec nix-shell -p python3Packages.pillow --run "python3 '$SCRIPT_DIR/tileconv.py' $*"
