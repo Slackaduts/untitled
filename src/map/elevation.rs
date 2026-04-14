@@ -56,13 +56,13 @@ pub struct ElevationRenderCam {
 
 #[derive(Resource, Default)]
 pub struct ElevationMaterials {
-    pub by_level: bevy::utils::HashMap<u8, Handle<StandardMaterial>>,
+    pub by_level: std::collections::HashMap<u8, Handle<StandardMaterial>>,
 }
 
 /// Stores the computed Z height for each elevation level's floor.
 #[derive(Resource, Default)]
 pub struct ElevationHeights {
-    pub z_by_level: bevy::utils::HashMap<u8, f32>,
+    pub z_by_level: std::collections::HashMap<u8, f32>,
 }
 
 /// What kind of terrain layer this is.
@@ -126,9 +126,9 @@ pub fn setup_elevation_meshes(
          Without<ElevationMeshReady>, Without<SlopeLayer>),
     >,
 ) {
-    let mut elevation_groups: bevy::utils::HashMap<u8, Vec<Entity>> =
-        bevy::utils::HashMap::new();
-    let mut height_per_level: bevy::utils::HashMap<u8, u8> = bevy::utils::HashMap::new();
+    let mut elevation_groups: std::collections::HashMap<u8, Vec<Entity>> =
+        std::collections::HashMap::new();
+    let mut height_per_level: std::collections::HashMap<u8, u8> = std::collections::HashMap::new();
     let mut map_dims: Option<(f32, f32, f32, f32)> = None; // (map_w, map_h, tw, th)
 
     for (entity, elevation, _storage, size, tile_size) in &layers {
@@ -158,7 +158,7 @@ pub fn setup_elevation_meshes(
     let map_center = Vec2::new(map_w * 0.5, map_h * 0.5);
 
     // Compute tile bounding boxes per level
-    let mut level_bounds: bevy::utils::HashMap<u8, (f32, f32, f32, f32)> = bevy::utils::HashMap::new();
+    let mut level_bounds: std::collections::HashMap<u8, (f32, f32, f32, f32)> = std::collections::HashMap::new();
     for (_, elevation, storage, size, tile_size) in &layers {
         let lv = elevation.level;
         let tw = tile_size.x;

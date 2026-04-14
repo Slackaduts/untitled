@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use std::collections::HashMap;
 
 /// Per-tile billboard property overrides.
 /// Stored in TSX files as `<tile type="TileBillboard">` custom properties.

@@ -1,10 +1,11 @@
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology};
-use bevy::render::render_asset::RenderAssetUsages;
+use bevy::asset::RenderAssetUsages;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, ShaderRef, ShaderType,
+    AsBindGroup, Extent3d, ShaderType,
     TextureDimension, TextureFormat,
 };
+use bevy::shader::ShaderRef;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_ecs_tiled::prelude::TiledMapTileLayerForTileset;
 

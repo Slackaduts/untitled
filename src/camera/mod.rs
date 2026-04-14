@@ -3,7 +3,7 @@ pub mod cutscene;
 pub mod follow;
 
 use bevy::audio::SpatialListener;
-use bevy::core_pipeline::fxaa::Fxaa;
+use bevy::anti_alias::fxaa::Fxaa;
 use bevy::prelude::*;
 
 use crate::app_state::GameState;

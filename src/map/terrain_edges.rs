@@ -20,8 +20,8 @@ pub fn generate_edge_colliders(
     >,
     tile_indices: Query<&TileTextureIndex>,
 ) {
-    let mut parent_data: bevy::utils::HashMap<Entity, (u32, u32, f32, f32, Vec<(Entity, String)>)> =
-        bevy::utils::HashMap::new();
+    let mut parent_data: std::collections::HashMap<Entity, (u32, u32, f32, f32, Vec<(Entity, String)>)> =
+        std::collections::HashMap::new();
 
     for (entity, _storage, map_size, tile_size, name, parent) in &layers {
         let entry = parent_data

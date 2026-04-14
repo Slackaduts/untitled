@@ -7,12 +7,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy = { version = "0.15", features = ["wayland", "qoi"] }
-bevy_ecs_tilemap = "0.15"
-bevy_ecs_tiled = { version = "0.6", features = ["physics"] }
-bevy_egui = "0.33"
+bevy = { version = "0.18", features = ["wayland", "qoi"] }
+bevy_ecs_tilemap = "0.18"
+bevy_ecs_tiled = { version = "0.11", features = ["physics"] }
+bevy_egui = "0.39"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
-avian3d = "0.2"
+avian3d = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 pathfinding = "4"

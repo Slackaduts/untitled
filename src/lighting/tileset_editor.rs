@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use std::collections::HashMap;
 use bevy_egui::{EguiContexts, egui};
 use bevy_ecs_tiled::prelude::*;
 

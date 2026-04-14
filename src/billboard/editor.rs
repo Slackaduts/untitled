@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use bevy::prelude::*;
-use bevy::utils::HashMap;
+use std::collections::HashMap;
 use bevy_egui::{EguiContexts, egui};
 
 use super::properties::{TileBillboardEdit, BillboardPropertyDefs, load_existing_edits_from_tsx, save_tsx_changes};

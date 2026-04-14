@@ -150,8 +150,8 @@ pub fn build_terrain_and_attach_material(
 ) {
     // Group layers by (parent, elevation_level). Each elevation gets its own
     // terrain type map so transitions are independent per elevation plane.
-    let mut layer_groups: bevy::utils::HashMap<(Entity, u8), Vec<(Entity, &Name, &TileStorage, &TilemapSize)>> =
-        bevy::utils::HashMap::new();
+    let mut layer_groups: std::collections::HashMap<(Entity, u8), Vec<(Entity, &Name, &TileStorage, &TilemapSize)>> =
+        std::collections::HashMap::new();
 
     for (entity, name, storage, size, parent) in &new_layers {
         if storage.size.x == 0 || storage.size.y == 0 {

@@ -87,7 +87,7 @@ impl CornerHeightMap {
 /// Per-level corner height maps.
 #[derive(Resource, Default)]
 pub struct SlopeHeightMaps {
-    pub by_level: bevy::utils::HashMap<u8, CornerHeightMap>,
+    pub by_level: std::collections::HashMap<u8, CornerHeightMap>,
 }
 
 // ── Height propagation system ──────────────────────────────────────────────
