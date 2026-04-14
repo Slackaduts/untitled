@@ -15,10 +15,34 @@ use crate::map::DEFAULT_TILE_SIZE;
 
 // ── Billboard material with per-pixel depth ─────────────────────────────
 
-#[derive(ShaderType, Clone, Default)]
+#[derive(ShaderType, Clone)]
 pub struct BillboardParams {
-    pub depth_range: f32,
-    pub _pad: Vec3,
+    /// 1.0 = normal map bound, 0.0 = unlit
+    pub has_normal_map: f32,
+    /// Light direction in tangent space
+    pub light_dir_x: f32,
+    pub light_dir_y: f32,
+    pub light_dir_z: f32,
+    /// Ambient light intensity (0-1)
+    pub ambient: f32,
+    /// Normal map influence strength
+    pub normal_strength: f32,
+    pub _pad: Vec2,
+}
+
+impl Default for BillboardParams {
+    fn default() -> Self {
+        Self {
+            has_normal_map: 0.0,
+            // Default light from upper-left (matching typical 2D game lighting)
+            light_dir_x: -0.4,
+            light_dir_y: 0.6,
+            light_dir_z: 0.7,
+            ambient: 0.5,
+            normal_strength: 1.0,
+            _pad: Vec2::ZERO,
+        }
+    }
 }
 
 #[derive(Asset, AsBindGroup, TypePath, Clone)]
@@ -26,7 +50,10 @@ pub struct BillboardMaterial {
     #[texture(0)]
     #[sampler(1)]
     pub base_texture: Handle<Image>,
-    #[uniform(2)]
+    #[texture(2)]
+    #[sampler(3)]
+    pub normal_texture: Handle<Image>,
+    #[uniform(4)]
     pub params: BillboardParams,
 }
 
