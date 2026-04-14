@@ -105,17 +105,32 @@ pub fn load_billboard_properties(
     }
 }
 
-/// Apply collider depth overrides from billboard properties to billboard
-/// entities that have both a BillboardProperties and a Collider component.
+/// Apply collider depth overrides from billboard properties.
+/// Finds colliders on billboard entities and replaces them with
+/// colliders at the custom depth.
 pub fn apply_collider_depth_overrides(
     mut commands: Commands,
-    query: Query<(Entity, &BillboardProperties), (With<crate::camera::combat::BillboardTileQuad>, Added<BillboardProperties>)>,
+    query: Query<(Entity, &BillboardProperties, &avian3d::prelude::Collider), Added<BillboardProperties>>,
 ) {
-    for (entity, props) in &query {
+    for (entity, props, existing_collider) in &query {
         if (props.collider_depth - 48.0).abs() > 0.01 {
-            // The collider depth differs from default — this will be used
-            // when the collider system processes this entity's tile.
-            info!("Billboard entity {:?} has custom collider depth: {}", entity, props.collider_depth);
+            // Get the existing collider's XY dimensions from its AABB
+            let aabb = existing_collider.shape_scaled()
+                .compute_aabb(&avian3d::parry::math::Pose::identity());
+            let half_x = aabb.half_extents()[0];
+            let half_y = aabb.half_extents()[1];
+
+            // Replace with a collider at the custom depth
+            let new_collider = avian3d::prelude::Collider::cuboid(
+                half_x * 2.0,
+                half_y * 2.0,
+                props.collider_depth,
+            );
+            commands.entity(entity).insert(new_collider);
+            info!(
+                "Applied custom collider depth {:.0} to billboard {:?}",
+                props.collider_depth, entity
+            );
         }
     }
 }
