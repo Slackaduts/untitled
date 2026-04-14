@@ -17,8 +17,8 @@ use crate::map::DEFAULT_TILE_SIZE;
 
 #[derive(ShaderType, Clone)]
 pub struct BillboardParams {
-    /// 1.0 = normal map bound, 0.0 = unlit
-    pub has_normal_map: f32,
+    /// Feature flags: 0=unlit, 1=normal map, 2=normal+depth (parallax)
+    pub features: f32,
     /// Light direction in tangent space
     pub light_dir_x: f32,
     pub light_dir_y: f32,
@@ -27,20 +27,23 @@ pub struct BillboardParams {
     pub ambient: f32,
     /// Normal map influence strength
     pub normal_strength: f32,
-    pub _pad: Vec2,
+    /// Parallax depth scale
+    pub parallax_scale: f32,
+    /// Number of parallax layers (4-32)
+    pub parallax_layers: f32,
 }
 
 impl Default for BillboardParams {
     fn default() -> Self {
         Self {
-            has_normal_map: 0.0,
-            // Default light from upper-left (matching typical 2D game lighting)
+            features: 0.0, // unlit by default
             light_dir_x: -0.4,
             light_dir_y: 0.6,
             light_dir_z: 0.7,
             ambient: 0.5,
             normal_strength: 1.0,
-            _pad: Vec2::ZERO,
+            parallax_scale: 0.03,
+            parallax_layers: 8.0,
         }
     }
 }
@@ -53,7 +56,10 @@ pub struct BillboardMaterial {
     #[texture(2)]
     #[sampler(3)]
     pub normal_texture: Handle<Image>,
-    #[uniform(4)]
+    #[texture(4)]
+    #[sampler(5)]
+    pub depth_texture: Handle<Image>,
+    #[uniform(6)]
     pub params: BillboardParams,
 }
 
