@@ -12,11 +12,7 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         overlays = [ (import rust-overlay) ];
-        pkgs = import nixpkgs {
-          inherit system overlays;
-          config.allowUnfree = true;  # needed for CUDA
-          config.cudaSupport = true;
-        };
+        pkgs = import nixpkgs { inherit system overlays; };
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
@@ -44,16 +40,6 @@
 
             # Lua
             lua5_4
-
-            # Python + AI for normal/depth map generation
-            (pkgs.python3.withPackages (ps: with ps; [
-              torch
-              torchvision
-              transformers
-              pillow
-              numpy
-              scipy
-            ]))
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
