@@ -1,6 +1,6 @@
 pub mod properties;
 #[cfg(feature = "dev_tools")]
-pub mod editor;
+pub mod object_editor;
 
 use bevy::prelude::*;
 use properties::BillboardPropertyDefs;
@@ -15,8 +15,20 @@ impl Plugin for BillboardPropertiesPlugin {
 
         #[cfg(feature = "dev_tools")]
         {
-            app.init_resource::<editor::BillboardEditorState>()
-                .add_systems(Update, editor::billboard_editor_system);
+            app.init_resource::<object_editor::ObjectEditorState>()
+                .add_systems(
+                    Update,
+                    (
+                        object_editor::toggle_object_editor,
+                        object_editor::scan_objects
+                            .after(object_editor::toggle_object_editor),
+                        object_editor::object_editor_ui
+                            .after(object_editor::scan_objects),
+                        object_editor::live_preview_system
+                            .after(object_editor::object_editor_ui),
+                        object_editor::draw_object_light_gizmos,
+                    ),
+                );
         }
     }
 }

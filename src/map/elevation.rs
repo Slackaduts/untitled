@@ -245,7 +245,10 @@ pub fn setup_elevation_meshes(
         elev_heights.z_by_level.insert(level, z);
         let mat = materials.add(StandardMaterial {
             base_color_texture: Some(rt_handle),
-            unlit: true,
+            unlit: false,
+            perceptual_roughness: 1.0,
+            metallic: 0.0,
+            reflectance: 0.0,
             alpha_mode: AlphaMode::Mask(0.9),
             double_sided: true,
             cull_mode: None,
@@ -335,12 +338,14 @@ pub fn setup_elevation_meshes(
                     }
                 }
             }
-            // Normalize
+            // Force all normals to point straight up (+Z). This gives uniform
+            // diffuse lighting across the terrain regardless of slope geometry,
+            // preventing bright patches from directional light hitting angled faces.
+            // Shadows still work correctly (they use depth, not normals).
             for n in &mut normals {
-                let len = (n[0]*n[0] + n[1]*n[1] + n[2]*n[2]).sqrt();
-                if len > 0.0 {
-                    n[0] /= len; n[1] /= len; n[2] /= len;
-                }
+                n[0] = 0.0;
+                n[1] = 0.0;
+                n[2] = 1.0;
             }
 
             // Indices: two triangles per tile

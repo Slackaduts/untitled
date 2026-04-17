@@ -21,6 +21,8 @@ pub struct TileBillboardEdit {
     pub collider_w: f32,
     /// Collider height override. -1 = use Tiled's collision shape.
     pub collider_h: f32,
+    /// Disable depth-map self-shadows for this tile.
+    pub no_shadows: bool,
 }
 
 impl Default for TileBillboardEdit {
@@ -34,6 +36,7 @@ impl Default for TileBillboardEdit {
             collider_depth: 48.0,
             collider_w: -1.0,
             collider_h: -1.0,
+            no_shadows: false,
         }
     }
 }
@@ -75,6 +78,7 @@ pub struct BillboardProperties {
     pub tilt_override: f32,
     pub z_offset: f32,
     pub collider_depth: f32,
+    pub no_shadows: bool,
 }
 
 // ── Runtime loading system ──────────────────────────────────────────────────
@@ -193,6 +197,7 @@ pub fn load_existing_edits_from_tsx(content: &str) -> HashMap<u32, TileBillboard
                     "collider_depth" => edit.collider_depth = v,
                     "collider_w" => edit.collider_w = v,
                     "collider_h" => edit.collider_h = v,
+                    "no_shadows" => edit.no_shadows = v > 0.5,
                     _ => {}
                 }
             }
@@ -242,6 +247,9 @@ pub fn format_tile_element(tile_id: u32, edit: &TileBillboardEdit) -> String {
     }
     if edit.collider_h >= 0.0 {
         props.push(format!("   <property name=\"collider_h\" type=\"float\" value=\"{:.1}\"/>", edit.collider_h));
+    }
+    if edit.no_shadows {
+        props.push("   <property name=\"no_shadows\" type=\"float\" value=\"1.0\"/>".to_string());
     }
 
     if props.is_empty() {

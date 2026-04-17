@@ -2,88 +2,14 @@ use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, ShaderType,
-    TextureDimension, TextureFormat,
+    Extent3d, TextureDimension, TextureFormat,
 };
-use bevy::shader::ShaderRef;
 use bevy_ecs_tilemap::prelude::*;
 use bevy_ecs_tiled::prelude::TiledTilemap;
 
 use super::CombatCamera3d;
 use crate::billboard::properties::BillboardProperties;
 use crate::map::DEFAULT_TILE_SIZE;
-
-// ── Billboard material with per-pixel depth ─────────────────────────────
-
-#[derive(ShaderType, Clone)]
-pub struct BillboardParams {
-    /// Feature flags: 0=unlit, 1=normal map, 2=normal+depth (parallax)
-    pub features: f32,
-    /// Light direction in tangent space
-    pub light_dir_x: f32,
-    pub light_dir_y: f32,
-    pub light_dir_z: f32,
-    /// Ambient light intensity (0-1)
-    pub ambient: f32,
-    /// Normal map influence strength
-    pub normal_strength: f32,
-    /// Parallax depth scale
-    pub parallax_scale: f32,
-    /// Number of parallax layers (4-32)
-    pub parallax_layers: f32,
-}
-
-impl Default for BillboardParams {
-    fn default() -> Self {
-        Self {
-            features: 0.0, // unlit by default
-            light_dir_x: -0.4,
-            light_dir_y: 0.6,
-            light_dir_z: 0.7,
-            ambient: 0.5,
-            normal_strength: 1.0,
-            parallax_scale: 0.03,
-            parallax_layers: 8.0,
-        }
-    }
-}
-
-#[derive(Asset, AsBindGroup, TypePath, Clone)]
-pub struct BillboardMaterial {
-    #[texture(0)]
-    #[sampler(1)]
-    pub base_texture: Handle<Image>,
-    #[texture(2)]
-    #[sampler(3)]
-    pub normal_texture: Handle<Image>,
-    #[texture(4)]
-    #[sampler(5)]
-    pub depth_texture: Handle<Image>,
-    #[uniform(6)]
-    pub params: BillboardParams,
-}
-
-impl Material for BillboardMaterial {
-    fn fragment_shader() -> ShaderRef {
-        "shaders/billboard.wgsl".into()
-    }
-
-    fn alpha_mode(&self) -> AlphaMode {
-        // Mask mode writes depth (unlike Blend which doesn't).
-        // Low threshold so semi-transparent edges still render.
-        AlphaMode::Mask(0.05)
-    }
-
-    fn specialize(
-        _pipeline: &bevy::pbr::MaterialPipeline,
-        descriptor: &mut bevy::render::render_resource::RenderPipelineDescriptor,
-        _layout: &bevy::mesh::MeshVertexBufferLayoutRef,
-        _key: bevy::pbr::MaterialPipelineKey<Self>,
-    ) -> Result<(), bevy::render::render_resource::SpecializedMeshPipelineError> {
-        descriptor.primitive.cull_mode = None;
-        Ok(())
-    }
-}
 
 // ── Resources ──────────────────────────────────────────────────────────────
 
@@ -149,6 +75,11 @@ pub struct BillboardHeight {
     pub base_y: f32,
 }
 
+/// Dedup key for billboard sprite export. Hash of the sorted tile indices
+/// used to build this billboard's composite texture.
+#[derive(Component)]
+pub struct BillboardSpriteKey(pub String);
+
 /// Small Z offset for layer ordering within the same elevation level.
 /// Prevents Z-fighting between overlapping billboards from different Tiled layers.
 #[derive(Component)]
@@ -162,8 +93,7 @@ pub fn setup_billboard_tiles(
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut std_materials: ResMut<Assets<StandardMaterial>>,
-    mut bb_materials: ResMut<Assets<BillboardMaterial>>,
+    mut bb_materials: ResMut<Assets<super::billboard_material::BillboardMaterial>>,
     billboard_defs: Res<crate::billboard::properties::BillboardPropertyDefs>,
     tilemap_layers: Query<
         (Entity, &Name, &TileStorage, &TilemapSize, &TilemapTileSize,
@@ -438,8 +368,39 @@ pub fn setup_billboard_tiles(
                         }
                     }
 
-                    // Apply ground blend to composite texture (after unpremultiply)
-                    let blend_height = bb_props.map_or(0.0, |p| p.blend_height);
+                    // Apply ground blend to composite texture (after unpremultiply).
+                    // Check properties.json first (F7 editor), fall back to TSX property.
+                    let mut blend_height = bb_props.map_or(0.0, |p| p.blend_height);
+                    {
+                        let ts_name_for_props = name_str
+                            .strip_prefix("TiledTilemap(")
+                            .and_then(|s| s.strip_suffix(')'))
+                            .and_then(|s| s.rsplit_once(", "))
+                            .map(|(_, n)| n)
+                            .unwrap_or(name_str);
+                        // sprite_key isn't computed yet, but we can construct the same hash
+                        let mut tile_indices_for_blend: Vec<u32> = component.iter()
+                            .filter_map(|&idx| grid[idx].map(|t| t as u32))
+                            .collect();
+                        tile_indices_for_blend.sort();
+                        tile_indices_for_blend.dedup();
+                        let key_str_for_blend = tile_indices_for_blend.iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<_>>()
+                            .join("_");
+                        use std::hash::{Hash, Hasher};
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        key_str_for_blend.hash(&mut hasher);
+                        let sprite_key_for_blend = format!("{ts_name_for_props}_{:08x}", hasher.finish() as u32);
+                        let props_path = format!("assets/objects/{ts_name_for_props}/{sprite_key_for_blend}/properties.json");
+                        if let Ok(json_str) = std::fs::read_to_string(&props_path) {
+                            if let Ok(props) = serde_json::from_str::<crate::billboard::object_editor::ObjectProperties>(&json_str) {
+                                if props.blend_height > 0.0 {
+                                    blend_height = props.blend_height;
+                                }
+                            }
+                        }
+                    }
                     if blend_height > 0.0 {
                         let blend_rows = (blend_height as u32).min(comp_h);
                         for py in 0..blend_rows {
@@ -489,11 +450,69 @@ pub fn setup_billboard_tiles(
                     let origin_px_x = quad_w * 0.5;
                     let origin_px_y = DEFAULT_TILE_SIZE * 0.5;
 
+                    // Build dedup key from sorted tile indices
+                    let sprite_key = {
+                        let mut tile_indices: Vec<u32> = component.iter()
+                            .filter_map(|&idx| grid[idx].map(|t| t as u32))
+                            .collect();
+                        tile_indices.sort();
+                        tile_indices.dedup();
+                        let key_str = tile_indices.iter()
+                            .map(|i| i.to_string())
+                            .collect::<Vec<_>>()
+                            .join("_");
+                        use std::hash::{Hash, Hasher};
+                        let mut h = std::collections::hash_map::DefaultHasher::new();
+                        key_str.hash(&mut h);
+                        let ts_name = name_str
+                            .strip_prefix("TiledTilemap(")
+                            .and_then(|s| s.strip_suffix(')'))
+                            .and_then(|s| s.rsplit_once(", "))
+                            .map(|(_, n)| n)
+                            .unwrap_or(name_str);
+                        format!("{ts_name}_{:08x}", h.finish() as u32)
+                    };
+
+                    // Export billboard sprite to disk (debug builds only).
+                    // Done here because Image data is dropped after GPU upload.
+                    // Cleans up shadow/artifact pixels for better AI mesh generation
+                    // without modifying the in-game billboard.
+                    #[cfg(feature = "dev_tools")]
+                    {
+                        let ts_name = sprite_key.rsplit_once('_')
+                            .map(|(name, _)| name)
+                            .unwrap_or(&sprite_key);
+                        // Each sprite gets its own subfolder: <tileset>/<sprite_key>/sprite.png
+                        let dir = std::path::Path::new("assets/objects")
+                            .join(ts_name)
+                            .join(&sprite_key);
+                        let path = dir.join("sprite.png");
+                        if !path.exists() {
+                            let _ = std::fs::create_dir_all(&dir);
+                            let mut clean = comp_pixels.clone();
+                            clean_sprite_for_export(&mut clean, comp_w, trimmed_h);
+                            if let Some(img) = image::RgbaImage::from_raw(comp_w, trimmed_h, clean) {
+                                match img.save(&path) {
+                                    Ok(()) => info!("Exported: {}", path.display()),
+                                    Err(e) => warn!("Failed to export sprite: {e}"),
+                                }
+                            }
+                            // Save blend_height so the mesh pipeline can trim shadow bottoms
+                            if blend_height > 0.0 {
+                                let _ = std::fs::write(
+                                    dir.join("blend_height.txt"),
+                                    format!("{blend_height}"),
+                                );
+                            }
+                        }
+                    }
+
                     let comp_image = Image::new(
                         Extent3d { width: comp_w, height: trimmed_h, depth_or_array_layers: 1 },
                         TextureDimension::D2, comp_pixels,
                         TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default(),
                     );
+
                     let quad_mesh = create_billboard_quad(
                         quad_w, quad_h, origin_px_x, origin_px_y,
                     );
@@ -506,11 +525,8 @@ pub fn setup_billboard_tiles(
                         .map(|(_, ts_name)| ts_name)
                         .unwrap_or("");
                     let normal_path = format!("tilesets/{}_normal.png", tileset_name);
-                    let depth_path = format!("tilesets/{}_depth.png", tileset_name);
-
-                    // Check if normal/depth map files exist
+                    // Check if normal map file exists
                     let has_normal = std::path::Path::new(&format!("assets/{}", normal_path)).exists();
-                    let has_depth = std::path::Path::new(&format!("assets/{}", depth_path)).exists();
 
                     // Composite normal and depth maps using the same tile layout
                     let normal_handle = if has_normal {
@@ -575,66 +591,63 @@ pub fn setup_billboard_tiles(
                         create_flat_texture(&mut images, comp_w, trimmed_h, [128, 128, 255, 255])
                     };
 
-                    let depth_handle = if has_depth {
-                        let depth_atlas: Handle<Image> = asset_server.load(&depth_path);
-                        if let Some(depth_img) = images.get(&depth_atlas) {
-                            let depth_data = depth_img.data.clone().unwrap_or_default();
-                            let depth_w = depth_img.texture_descriptor.size.width;
-                            let depth_bpp = if depth_img.texture_descriptor.format == TextureFormat::R8Unorm { 1u32 } else { 4u32 };
-                            let depth_cols = (depth_w as f32 / ts.x).round() as u32;
+                    let comp_tex_handle = images.add(comp_image);
 
-                            let mut dep_pixels = vec![0u8; (comp_w * trimmed_h * 4) as usize];
-                            for ty in 0..rect_h {
-                                for tx in 0..rect_w {
-                                    let Some(tile_idx) = grid[(min_y + ty) * w + (min_x + tx)] else { continue };
-                                    let ac = tile_idx % depth_cols;
-                                    let ar = tile_idx / depth_cols;
-                                    let src_x0 = ac * tile_w;
-                                    let src_y0 = ar * tile_h;
-                                    let dst_y0 = (rect_h as u32 - 1 - ty as u32) * tile_h;
-                                    for py in 0..tile_h {
-                                        let dst_row = dst_y0 + py;
-                                        if dst_row >= trimmed_h { continue; }
-                                        for px in 0..tile_w {
-                                            let si = ((src_y0 + py) * depth_w + src_x0 + px) as usize * depth_bpp as usize;
-                                            let di = ((dst_row * comp_w + tx as u32 * tile_w + px) * 4) as usize;
-                                            if si < depth_data.len() && di + 3 < dep_pixels.len() {
-                                                let v = depth_data[si];
-                                                dep_pixels[di] = v;
-                                                dep_pixels[di + 1] = v;
-                                                dep_pixels[di + 2] = v;
-                                                dep_pixels[di + 3] = 255;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            let dep_img = Image::new(
-                                Extent3d { width: comp_w, height: trimmed_h, depth_or_array_layers: 1 },
-                                TextureDimension::D2, dep_pixels,
-                                TextureFormat::Rgba8UnormSrgb, RenderAssetUsages::default(),
-                            );
-                            images.add(dep_img)
-                        } else {
-                            create_flat_texture(&mut images, comp_w, trimmed_h, [0, 0, 0, 255])
-                        }
+                    // Load depth profile for shadow displacement (if available).
+                    let ts_name_depth = sprite_key.rsplit_once('_')
+                        .map(|(name, _)| name)
+                        .unwrap_or(&sprite_key);
+                    let depth_path_str = format!(
+                        "objects/{ts_name_depth}/{}/depth.png", sprite_key
+                    );
+                    let depth_exists = std::path::Path::new(
+                        &format!("assets/{depth_path_str}")
+                    ).exists();
+
+                    let depth_handle = if depth_exists {
+                        asset_server.load(&depth_path_str)
                     } else {
-                        create_flat_texture(&mut images, comp_w, trimmed_h, [0, 0, 0, 255])
+                        // Fallback: 1x1 black texture (zero depth everywhere).
+                        create_flat_texture(&mut images, 1, 1, [0, 0, 0, 255])
                     };
 
-                    let features = if has_normal && has_depth { 2.0 }
-                        else if has_normal { 1.0 }
-                        else { 0.0 };
+                    let max_depth = if depth_exists {
+                        let md_path = format!(
+                            "assets/objects/{ts_name_depth}/{}/max_depth.txt", sprite_key
+                        );
+                        std::fs::read_to_string(&md_path)
+                            .ok()
+                            .and_then(|s| s.trim().parse::<f32>().ok())
+                            .unwrap_or(0.0)
+                            * (quad_h / 2.0) // scale from mesh units to world units
+                    } else {
+                        // No depth map: uniform protrusion gives some thickness
+                        // so shadows aren't paper-flat. ~25% of billboard height.
+                        quad_h * 0.25
+                    };
 
-                    let mat = bb_materials.add(BillboardMaterial {
-                        base_texture: images.add(comp_image),
-                        normal_texture: normal_handle,
-                        depth_texture: depth_handle,
-                        params: BillboardParams {
-                            features,
-                            ..default()
+                    let mat = bb_materials.add(
+                        super::billboard_material::BillboardMaterial {
+                            base: StandardMaterial {
+                                base_color_texture: Some(comp_tex_handle.clone()),
+                                alpha_mode: AlphaMode::Mask(0.5),
+                                unlit: true,
+                                double_sided: true,
+                                cull_mode: None,
+                                ..default()
+                            },
+                            extension: super::billboard_material::BillboardDepthExtension {
+                                depth_params: super::billboard_material::BillboardDepthParams {
+                                    max_depth,
+                                    alpha_cutoff: 0.5,
+                                    has_depth_map: if depth_exists { 1 } else { 0 },
+                                    _pad: 0.0,
+                                },
+                                base_color_texture: comp_tex_handle.clone(),
+                                depth_texture: depth_handle,
+                            },
                         },
-                    });
+                    );
 
                     let bb_level = tile_elev.map_or(0, |e| e.level);
                     let layer_z_offset = non_terrain_layer_idx as f32 * 0.5;
@@ -648,6 +661,7 @@ pub fn setup_billboard_tiles(
                         BillboardHeight { height: quad_h, base_y: world_y },
                         BillboardElevation { level: bb_level },
                         BillboardLayerOffset(layer_z_offset),
+                        BillboardSpriteKey(sprite_key.clone()),
                     ));
 
                     // Attach billboard properties component if customized
@@ -659,9 +673,12 @@ pub fn setup_billboard_tiles(
                                 tilt_override: props.tilt_override,
                                 z_offset: props.z_offset,
                                 collider_depth: props.collider_depth,
+                                no_shadows: props.no_shadows,
                             });
                         }
                     }
+
+                    // Bevy's 3D shadow mapping handles billboard shadows natively
                 }
             }
 
@@ -672,6 +689,179 @@ pub fn setup_billboard_tiles(
 
     billboard_ready.0 = true;
     info!("Billboard setup: non-terrain as greedy-merged 3D quads (terrain handled by elevation system)");
+}
+
+
+/// Marker for billboards that have had their lights spawned from properties.json.
+#[derive(Component)]
+pub struct ObjectLightsSpawned;
+
+/// Spawns point lights from properties.json for billboard tile objects.
+/// Runs after billboards are ready; the ObjectLightsSpawned marker prevents re-processing.
+pub fn spawn_object_lights(
+    mut commands: Commands,
+    billboard_ready: Res<BillboardTilesReady>,
+    billboards: Query<
+        (Entity, &BillboardSpriteKey, &Transform, &BillboardHeight),
+        (With<Billboard>, Without<ObjectLightsSpawned>),
+    >,
+) {
+    if !billboard_ready.0 {
+        return;
+    }
+    let bb_count = billboards.iter().count();
+    if bb_count == 0 {
+        return;
+    }
+
+    let mut light_count = 0;
+
+    for (bb_entity, key, bb_tf, bb_height) in &billboards {
+        let ts_name = key.0.rsplit_once('_')
+            .map(|(name, _)| name)
+            .unwrap_or(&key.0);
+        let sprite_dir = format!("assets/objects/{ts_name}/{}", key.0);
+        let props_path = format!("{sprite_dir}/properties.json");
+
+        let obj_props: Option<crate::billboard::object_editor::ObjectProperties> =
+            std::fs::read_to_string(&props_path)
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok());
+
+        commands.entity(bb_entity).insert(ObjectLightsSpawned);
+
+        let Some(props) = obj_props else { continue };
+        if props.lights.is_empty() { continue; }
+
+        for light_def in &props.lights {
+            use crate::lighting::components::*;
+
+            let shape = match light_def.shape.as_str() {
+                "cone" => LightShape::Cone {
+                    direction: 0.0,
+                    angle: std::f32::consts::FRAC_PI_2,
+                },
+                "line" => LightShape::Line {
+                    end_offset: Vec2::new(48.0, 0.0),
+                },
+                "capsule" => LightShape::Capsule {
+                    direction: 0.0,
+                    half_length: 24.0,
+                },
+                _ => LightShape::Point,
+            };
+
+            let bb_h = bb_height.height;
+            let local = Vec3::new(
+                (light_def.offset_x - 0.5) * bb_h,
+                light_def.offset_y * bb_h,
+                0.0,
+            );
+            let light_pos = bb_tf.translation + bb_tf.rotation * local;
+
+            commands.spawn((
+                Transform::from_translation(light_pos),
+                LightSource {
+                    color: Color::linear_rgb(
+                        light_def.color[0],
+                        light_def.color[1],
+                        light_def.color[2],
+                    ),
+                    base_intensity: light_def.intensity,
+                    intensity: light_def.intensity,
+                    inner_radius: light_def.radius * 0.3,
+                    outer_radius: light_def.radius,
+                    shape,
+                    pulse: if light_def.pulse { Some(PulseConfig::default()) } else { None },
+                    flicker: if light_def.flicker { Some(FlickerConfig::default()) } else { None },
+                    anim_seed: rand::random::<f32>() * 100.0,
+                    ..default()
+                },
+                crate::billboard::object_editor::ObjectSpriteLight {
+                    sprite_key: key.0.clone(),
+                    offset_x: light_def.offset_x,
+                    offset_y: light_def.offset_y,
+                },
+            ));
+            light_count += 1;
+        }
+    }
+
+    if light_count > 0 {
+        info!("Spawned {light_count} object lights");
+    }
+}
+
+/// Clean up a billboard sprite for AI mesh generation export.
+/// - Smoothly fades out dark semi-transparent shadow pixels
+/// - Zeroes isolated near-transparent stray pixels (1px artifacts)
+/// Does NOT modify the in-game billboard — only the exported PNG.
+#[cfg(feature = "dev_tools")]
+fn clean_sprite_for_export(pixels: &mut [u8], w: u32, h: u32) {
+    let w = w as usize;
+    let h = h as usize;
+
+    // Pass 1: Smoothly fade dark semi-transparent pixels.
+    // Shadow pixels are dark (low brightness) with low alpha.
+    // Scale their alpha based on brightness — darker = more transparent.
+    const ALPHA_CUTOFF: f32 = 100.0;   // only affect pixels with alpha below this
+    const BRIGHT_THRESH: f32 = 60.0;   // pixels darker than this (avg RGB) get faded
+
+    for chunk in pixels.chunks_exact_mut(4) {
+        let a = chunk[3] as f32;
+        if a < 1.0 || a >= ALPHA_CUTOFF {
+            continue; // fully transparent or solid enough to keep
+        }
+        let brightness = (chunk[0] as f32 + chunk[1] as f32 + chunk[2] as f32) / 3.0;
+        if brightness < BRIGHT_THRESH {
+            // Fade alpha based on brightness: darker = more transparent
+            // At brightness=0: alpha → 0. At brightness=BRIGHT_THRESH: alpha unchanged.
+            let factor = (brightness / BRIGHT_THRESH).powi(2); // quadratic for smooth falloff
+            chunk[3] = (a * factor) as u8;
+        }
+    }
+
+    // Pass 2: Zero out isolated near-transparent stray pixels.
+    // A pixel with alpha < 15 that has no neighbor with alpha > 64 is a stray artifact.
+    const STRAY_THRESH: u8 = 15;
+    const NEIGHBOR_THRESH: u8 = 64;
+
+    let mut to_zero = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            if pixels[idx + 3] == 0 || pixels[idx + 3] >= STRAY_THRESH {
+                continue;
+            }
+            // Check 8 neighbors for substantial content
+            let mut has_neighbor = false;
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dy == 0 { continue; }
+                    let nx = x as i32 + dx;
+                    let ny = y as i32 + dy;
+                    if nx < 0 || nx >= w as i32 || ny < 0 || ny >= h as i32 {
+                        continue;
+                    }
+                    let ni = (ny as usize * w + nx as usize) * 4;
+                    if pixels[ni + 3] >= NEIGHBOR_THRESH {
+                        has_neighbor = true;
+                        break;
+                    }
+                }
+                if has_neighbor { break; }
+            }
+            if !has_neighbor {
+                to_zero.push(idx);
+            }
+        }
+    }
+    for idx in to_zero {
+        pixels[idx] = 0;
+        pixels[idx + 1] = 0;
+        pixels[idx + 2] = 0;
+        pixels[idx + 3] = 0;
+    }
 }
 
 /// Create a quad mesh with tiling UVs, pivoted at the BOTTOM edge.
@@ -804,7 +994,7 @@ pub fn combat_camera_system(
 /// 90° = fully upright, 0° = flat on ground.
 /// At our ~42° camera angle, 65° gives a natural look: the billboard appears
 /// to stand up while the sprite is only viewed ~23° off face-on.
-pub const BILLBOARD_TILT_DEG: f32 = 50.0;
+pub const BILLBOARD_TILT_DEG: f32 = 35.0;
 
 /// Y-axis scale factor for colliders on billboard entities.
 /// Matches the visual foreshortening so the collision footprint agrees with
@@ -866,7 +1056,7 @@ pub fn billboard_system(
             // Height-based tilt: taller billboards stand more upright.
             // 1 tile high = default tilt, scales toward 75° for tall sprites.
             let tiles_tall = bh.height / DEFAULT_TILE_SIZE;
-            let max_upright = 75.0_f32.to_radians();
+            let max_upright = 55.0_f32.to_radians();
             let t = ((tiles_tall - 1.0) / 4.0).clamp(0.0, 1.0); // 1-5 tiles range
             default_tilt + (max_upright - default_tilt) * t
         } else {
@@ -888,6 +1078,8 @@ pub fn billboard_system(
         tf.rotation = Quat::from_rotation_x(tilt);
     }
 }
+
+// Billboard lighting and shadows are now handled by Bevy's built-in 3D lighting pipeline.
 
 /// Component that tracks which elevation level a billboard belongs to.
 #[derive(Component)]

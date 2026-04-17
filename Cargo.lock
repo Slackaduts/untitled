@@ -6584,6 +6584,7 @@ dependencies = [
  "pathfinding",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "serde_yaml",
  "tiled 0.14.0",
  "untitled_macros",

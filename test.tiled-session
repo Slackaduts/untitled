@@ -1,10 +1,10 @@
 {
     "activeFile": "assets/maps/test.tmx",
     "expandedProjectPaths": [
-        "assets/maps",
-        ".",
+        "assets",
         "assets/tilesets",
-        "assets"
+        ".",
+        "assets/maps"
     ],
     "file.lastUsedOpenFilter": "All Files (*)",
     "fileStates": {
@@ -12,11 +12,11 @@
             "scaleInDock": 1
         },
         "assets/maps/test.tmx": {
-            "scale": 1,
-            "selectedLayer": 2,
+            "scale": 0.5,
+            "selectedLayer": 3,
             "viewCenter": {
-                "x": 812.5,
-                "y": 303
+                "x": 926,
+                "y": 726
             }
         },
         "assets/tilesets/ADWinter_TileA1.tsx": {

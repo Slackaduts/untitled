@@ -10,6 +10,7 @@ pub mod tiled_physics_3d;
 
 use avian3d::prelude::*;
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::pbr::wireframe::WireframeConfig;
 use bevy::prelude::*;
 use bevy_ecs_tiled::prelude::*;
 use bevy_ecs_tilemap::prelude::*;
@@ -93,11 +94,12 @@ fn disable_physics_debug(mut config_store: ResMut<GizmoConfigStore>) {
 #[derive(Component)]
 struct FpsText;
 
-/// F3 toggles debug overlay: physics collider gizmos + FPS counter.
+/// F3 toggles debug overlay: physics collider gizmos + FPS counter + wireframe.
 fn toggle_debug_overlay(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut config_store: ResMut<GizmoConfigStore>,
+    mut wireframe_config: ResMut<WireframeConfig>,
     fps_query: Query<Entity, With<FpsText>>,
 ) {
     if !keyboard.just_pressed(KeyCode::F3) {
@@ -107,6 +109,8 @@ fn toggle_debug_overlay(
     let (config, _) = config_store.config_mut::<PhysicsGizmos>();
     config.enabled = !config.enabled;
     let debug_on = config.enabled;
+
+    wireframe_config.global = debug_on;
 
     if debug_on {
         if fps_query.is_empty() {

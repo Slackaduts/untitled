@@ -1,6 +1,8 @@
+use std::f32::consts::{FRAC_PI_2, PI};
+
 use bevy::prelude::*;
 
-use super::ambient::AmbientConfig;
+use super::components::SunLight;
 
 /// Tracks in-game time of day (0.0–24.0 hours).
 #[derive(Resource)]
@@ -30,7 +32,11 @@ pub fn advance_time_of_day(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
 }
 
 /// Maps hour-of-day to ambient color and intensity via piecewise-linear curves.
-pub fn compute_ambient_from_time(tod: Res<TimeOfDay>, mut ambient: ResMut<AmbientConfig>) {
+/// Writes to Bevy's built-in GlobalAmbientLight resource.
+pub fn compute_ambient_from_time(
+    tod: Res<TimeOfDay>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+) {
     let h = tod.hour;
 
     let (color, intensity) = match h {
@@ -82,8 +88,92 @@ pub fn compute_ambient_from_time(tod: Res<TimeOfDay>, mut ambient: ResMut<Ambien
         }
     };
 
+    // GlobalAmbientLight brightness is in cd/m². Scale our 0-1 range up.
     ambient.color = color;
-    ambient.intensity = intensity;
+    ambient.brightness = intensity * 200.0;
+}
+
+/// Spawns the sun DirectionalLight entity at startup.
+pub fn spawn_sun_light(mut commands: Commands) {
+    use bevy::light::cascade::CascadeShadowConfigBuilder;
+
+    commands.spawn((
+        SunLight,
+        DirectionalLight {
+            color: Color::WHITE,
+            illuminance: 8_000.0,
+            shadows_enabled: true,
+            shadow_depth_bias: 0.5,
+            shadow_normal_bias: 4.0,
+            ..default()
+        },
+        Transform::from_rotation(
+            Quat::from_euler(EulerRot::YXZ, PI * 0.5, -(FRAC_PI_2 - 60.0_f32.to_radians()), 0.0),
+        ),
+        // Configure cascades for our 2.5D camera at Z=900.
+        // Scene is ~900-1200 units from camera depending on position.
+        CascadeShadowConfigBuilder {
+            num_cascades: 4,
+            minimum_distance: 500.0,
+            maximum_distance: 2500.0,
+            first_cascade_far_bound: 800.0,
+            overlap_proportion: 0.3,
+        }
+        .build(),
+    ));
+    // Use higher resolution shadow maps for the large world-unit scale
+    commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+    // Low-res point light shadows: soft and cheap (6 faces × 512px each)
+    commands.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+}
+
+/// Rotates the sun DirectionalLight based on TimeOfDay.
+pub fn update_sun_light(
+    tod: Res<TimeOfDay>,
+    mut sun: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
+) {
+    let Ok((mut sun_light, mut sun_tf)) = sun.single_mut() else {
+        return;
+    };
+
+    let h = tod.hour;
+    let is_day = h >= 6.0 && h <= 18.0;
+
+    if !is_day {
+        sun_light.illuminance = 0.0;
+        return;
+    }
+
+    let t = (h - 6.0) / 12.0; // 0 at sunrise, 1 at sunset
+    let elevation = (t * PI).sin(); // peaks at noon
+    let azimuth = t * PI;
+
+    // Elevation angle: keep the sun steep (40°–80°) so shadow displacement stays small.
+    let min_elev = 40.0_f32.to_radians();
+    let max_elev = 80.0_f32.to_radians();
+    let elevation_angle = min_elev + elevation * (max_elev - min_elev);
+
+    // Rotate directional light: it shines along its -Z in local space
+    // We want it pointing downward at the elevation angle, sweeping east to west
+    sun_tf.rotation = Quat::from_euler(
+        EulerRot::YXZ,
+        azimuth,
+        -(FRAC_PI_2 - elevation_angle),
+        0.0,
+    );
+
+    // Illuminance: bright at noon, dim at dawn/dusk
+    // Fade smoothly at horizon
+    let dawn_dusk_fade = (elevation * 4.0).clamp(0.0, 1.0);
+    sun_light.illuminance = elevation * 8_000.0 * dawn_dusk_fade;
+
+    // Color shift: warm at dawn/dusk, white at noon
+    let warmth = 1.0 - elevation; // 0 at noon, 1 at horizon
+    sun_light.color = Color::linear_rgb(
+        1.0,
+        1.0 - warmth * 0.3,
+        1.0 - warmth * 0.5,
+    );
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 {

@@ -149,15 +149,11 @@ def main():
     if args.paths:
         files = [Path(p) for p in args.paths]
     else:
-        tileset_dir = Path("assets/tilesets")
-        if not tileset_dir.exists():
-            print(f"Error: {tileset_dir} not found. Run from project root.")
+        objects_dir = Path("assets/objects")
+        if not objects_dir.exists():
+            print(f"Error: {objects_dir} not found. Run from project root.")
             sys.exit(1)
-        # Process all PNG files that aren't already depth/normal maps
-        files = sorted(
-            p for p in tileset_dir.glob("*.png")
-            if not p.stem.endswith("_depth") and not p.stem.endswith("_normal")
-        )
+        files = sorted(objects_dir.rglob("sprite.png"))
 
     if not files:
         print("No files to process.")

@@ -1,11 +1,10 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_egui::{EguiContexts, egui};
-use bevy_ecs_tiled::prelude::*;
 
-use super::ambient::AmbientConfig;
 use super::components::{FlickerConfig, LightShape, LightSource, PulseConfig};
 use super::time_of_day::TimeOfDay;
+use crate::camera::CombatCamera3d;
 
 #[derive(Resource)]
 pub struct LightingDebugPanel {
@@ -20,10 +19,10 @@ pub struct LightingDebugPanel {
     pub placer_pulse: Option<PulseConfig>,
     pub placer_flicker: Option<FlickerConfig>,
     pub placer_shape: LightShape,
+    pub placer_height: f32,
     // Interaction state
     pub dragging: Option<Entity>,
     pub hovered_light: Option<Entity>,
-    pub tileset_editor_open: bool,
 }
 
 impl Default for LightingDebugPanel {
@@ -39,9 +38,9 @@ impl Default for LightingDebugPanel {
             placer_pulse: None,
             placer_flicker: None,
             placer_shape: LightShape::Point,
+            placer_height: 80.0,
             dragging: None,
             hovered_light: None,
-            tileset_editor_open: false,
         }
     }
 }
@@ -63,8 +62,8 @@ pub fn lighting_debug_ui(
     mut contexts: EguiContexts,
     mut panel: ResMut<LightingDebugPanel>,
     mut tod: ResMut<TimeOfDay>,
-    mut ambient: ResMut<AmbientConfig>,
-    mut lights: Query<(Entity, &mut LightSource), With<DebugLight>>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut lights: Query<(Entity, &mut LightSource, &mut Transform), With<DebugLight>>,
     mut commands: Commands,
 ) {
     if !panel.open {
@@ -102,12 +101,12 @@ pub fn lighting_debug_ui(
                     egui::color_picker::color_edit_button_rgb(ui, &mut rgb);
                 });
                 ambient.color = Color::linear_rgb(rgb[0], rgb[1], rgb[2]);
-                ui.add(egui::Slider::new(&mut ambient.intensity, 0.0..=2.0).text("Intensity"));
+                ui.add(egui::Slider::new(&mut ambient.brightness, 0.0..=400.0).text("Brightness"));
             } else {
                 let c = ambient.color.to_linear();
                 ui.label(format!(
-                    "Auto: ({:.2}, {:.2}, {:.2}) @ {:.2}",
-                    c.red, c.green, c.blue, ambient.intensity
+                    "Auto: ({:.2}, {:.2}, {:.2}) @ {:.0} cd/m²",
+                    c.red, c.green, c.blue, ambient.brightness
                 ));
             }
             ui.separator();
@@ -121,6 +120,7 @@ pub fn lighting_debug_ui(
             ui.add(egui::Slider::new(&mut panel.placer_intensity, 0.1..=5.0).text("Intensity"));
             ui.add(egui::Slider::new(&mut panel.placer_inner_radius, 1.0..=200.0).text("Inner R"));
             ui.add(egui::Slider::new(&mut panel.placer_outer_radius, 10.0..=500.0).text("Outer R"));
+            ui.add(egui::Slider::new(&mut panel.placer_height, 0.0..=300.0).text("Height"));
 
             shape_ui(ui, &mut panel.placer_shape, "placer");
             pulse_ui(ui, &mut panel.placer_pulse, "placer");
@@ -134,7 +134,7 @@ pub fn lighting_debug_ui(
             ui.toggle_value(&mut panel.placer_active, place_label);
 
             if ui.button("Clear all debug lights").clicked() {
-                for (entity, _) in lights.iter() {
+                for (entity, _, _) in lights.iter() {
                     commands.entity(entity).despawn();
                 }
             }
@@ -146,7 +146,7 @@ pub fn lighting_debug_ui(
             ui.label(format!("{count} debug light(s)"));
 
             let mut to_despawn = Vec::new();
-            for (entity, mut light) in lights.iter_mut() {
+            for (entity, mut light, mut tf) in lights.iter_mut() {
                 ui.push_id(entity, |ui| {
                     let frame_resp = egui::Frame::new()
                         .inner_margin(egui::Margin::same(2))
@@ -168,6 +168,12 @@ pub fn lighting_debug_ui(
                                         .speed(1.0)
                                         .prefix("R: "),
                                 );
+                                ui.add(
+                                    egui::DragValue::new(&mut tf.translation.z)
+                                        .range(0.0..=300.0)
+                                        .speed(1.0)
+                                        .prefix("H: "),
+                                );
                                 if ui.small_button("x").clicked() {
                                     to_despawn.push(entity);
                                 }
@@ -188,8 +194,6 @@ pub fn lighting_debug_ui(
             }
             ui.separator();
 
-            // ── Tileset Editor toggle ───────────────────────────────
-            ui.toggle_value(&mut panel.tileset_editor_open, "Tileset Light Editor");
         });
 }
 
@@ -307,7 +311,7 @@ pub fn place_light_on_click(
     panel: Res<LightingDebugPanel>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<CombatCamera3d>>,
     mut contexts: EguiContexts,
     mut commands: Commands,
 ) {
@@ -331,7 +335,7 @@ pub fn place_light_on_click(
     let world_pos = ray.get_point(distance);
 
     commands.spawn((
-        Transform::from_xyz(world_pos.x, world_pos.y, 0.0),
+        Transform::from_xyz(world_pos.x, world_pos.y, panel.placer_height),
         LightSource {
             color: Color::linear_rgb(
                 panel.placer_color[0],
@@ -349,6 +353,7 @@ pub fn place_light_on_click(
             ..default()
         },
         DebugLight,
+        super::components::InteractiveLight,
     ));
 }
 
@@ -357,7 +362,7 @@ pub fn draw_light_gizmos(
     mut panel: ResMut<LightingDebugPanel>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<CombatCamera3d>>,
     mut lights: Query<(Entity, &mut Transform, &LightSource), With<DebugLight>>,
     mut contexts: EguiContexts,
     mut gizmos: Gizmos,
@@ -386,7 +391,8 @@ pub fn draw_light_gizmos(
         let is_hovered = panel.hovered_light == Some(entity);
         let is_dragging = panel.dragging == Some(entity);
 
-        let icon_pos = Vec3::new(world_pos.x, world_pos.y, 2.0);
+        let light_z = world_pos.z.max(2.0);
+        let icon_pos = Vec3::new(world_pos.x, world_pos.y, light_z);
         let icon_r = if is_hovered || is_dragging {
             icon_world_radius * 1.5
         } else {
@@ -402,6 +408,11 @@ pub fn draw_light_gizmos(
             icon_r + 2.0,
             Color::WHITE,
         );
+        // Vertical line from ground to light showing height
+        if world_pos.z > 1.0 {
+            let ground = Vec3::new(world_pos.x, world_pos.y, 0.0);
+            gizmos.line(ground, icon_pos, light_color.with_alpha(0.4));
+        }
 
         // Hover highlight: show radius rings
         if is_hovered {
@@ -467,43 +478,3 @@ pub fn ambient_auto_active(panel: Res<LightingDebugPanel>) -> bool {
     !panel.ambient_override
 }
 
-/// Separate system for the tileset editor window (needs different system params).
-pub fn tileset_editor_system(
-    panel: Res<LightingDebugPanel>,
-    mut contexts: EguiContexts,
-    mut state: ResMut<super::tileset_editor::TilesetEditorState>,
-    asset_server: Res<AssetServer>,
-    map_assets: Res<Assets<TiledMapAsset>>,
-    map_handles: Query<(Entity, &TiledMap)>,
-    mut commands: Commands,
-) {
-    if !panel.open || !panel.tileset_editor_open {
-        return;
-    }
-
-    // Register tileset texture before borrowing ctx for the window
-    super::tileset_editor::ensure_texture_registered(
-        state.as_mut(),
-        &mut contexts,
-        &asset_server,
-    );
-
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-
-    let state = &mut *state;
-    egui::Window::new("Tileset Light Editor")
-        .default_width(400.0)
-        .default_height(500.0)
-        .show(ctx, |ui| {
-            super::tileset_editor::tileset_editor_section(
-                ui,
-                state,
-                &asset_server,
-                &map_assets,
-                &map_handles,
-                &mut commands,
-            );
-        });
-}

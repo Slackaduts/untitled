@@ -1,3 +1,4 @@
+pub mod billboard_material;
 pub mod combat;
 pub mod cutscene;
 pub mod follow;
@@ -6,8 +7,9 @@ use bevy::audio::SpatialListener;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
 
+use bevy::light::cluster::ClusterConfig;
+use bevy::light::ShadowFilteringMethod;
 use crate::app_state::GameState;
-use crate::lighting::uniforms::LightingPostProcess;
 use crate::sound::spatial::GameListener;
 
 pub struct CameraPlugin;
@@ -18,9 +20,9 @@ pub struct CombatCamera3d;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<combat::BillboardMaterial>::default())
-            .init_resource::<combat::CombatCamera>()
+        app.init_resource::<combat::CombatCamera>()
             .init_resource::<combat::BillboardTilesReady>()
+            .add_plugins(MaterialPlugin::<billboard_material::BillboardMaterial>::default())
             .add_systems(Startup, spawn_camera)
             .add_systems(
                 Update,
@@ -30,9 +32,15 @@ impl Plugin for CameraPlugin {
                     combat::combat_camera_system,
                     combat::billboard_system,
                     combat::combat_grid_fade,
+                    combat::spawn_object_lights
+                        .after(combat::setup_billboard_tiles),
+                    #[cfg(feature = "dev_tools")]
+                    crate::billboard::object_editor::update_object_light_positions
+                        .after(combat::billboard_system),
                 )
                     .run_if(in_state(GameState::Overworld)),
             );
+
     }
 }
 
@@ -46,13 +54,23 @@ fn spawn_camera(mut commands: Commands) {
             order: 0,
             ..default()
         },
+        // Far plane must cover the full camera-to-scene distance (~900+ units)
+        // plus visible area beyond the look-at point.
+        Projection::Perspective(PerspectiveProjection {
+            far: 3000.0,
+            ..default()
+        }),
         // Start at the same pitch used everywhere (overworld + combat)
         Transform::from_xyz(0.0, -900.0 * follow::OVERWORLD_TILT_OFFSET, 900.0)
             .looking_at(Vec3::ZERO, Vec3::Y),
         SpatialListener::new(400.0),
         GameListener,
         CombatCamera3d,
-        LightingPostProcess,
+        // Single cluster: all lights evaluated for every pixel. No spatial
+        // subdivision issues with our 2.5D tilted camera. Fine for <50 lights.
+        ClusterConfig::Single,
+        // Gaussian PCF: 5x5 filter kernel for soft shadow edges
+        ShadowFilteringMethod::Gaussian,
         Msaa::Off,
         Smaa { preset: SmaaPreset::Ultra },
     ));
