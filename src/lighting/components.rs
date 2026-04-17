@@ -122,8 +122,10 @@ impl Default for LightSource {
 }
 
 /// Max number of point/spot lights that cast shadows simultaneously.
-/// Only the closest lights to the camera get shadows; the rest illuminate without shadows.
-pub const SHADOW_BUDGET: usize = 3;
+/// Each shadow-casting point light renders a 6-face cube map per frame.
+/// Lights parented to billboards are offset forward of the depth-displaced
+/// extrusion so they don't self-occlude.
+pub const SHADOW_BUDGET: usize = 2;
 
 /// Intensity scaling factor: LightSource intensity (0-5 range) → lumens for Bevy lights.
 /// Bevy PBR uses physical units (lumens) with inverse-square falloff. Our world units
@@ -154,16 +156,18 @@ pub fn manage_shadow_budget(
 
     light_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Enable shadows on closest N, disable on the rest
+    // Enable shadows on closest N, disable on the rest. Only write when
+    // the value actually changes so unchanged lights don't get re-extracted
+    // to the render world every frame.
     for (i, &(_, entity, is_point)) in light_dists.iter().enumerate() {
         let enable = i < SHADOW_BUDGET;
         if is_point {
             if let Ok((_, _, mut pl)) = point_lights.get_mut(entity) {
-                pl.shadows_enabled = enable;
+                if pl.shadows_enabled != enable { pl.shadows_enabled = enable; }
             }
         } else {
             if let Ok((_, _, mut sl)) = spot_lights.get_mut(entity) {
-                sl.shadows_enabled = enable;
+                if sl.shadows_enabled != enable { sl.shadows_enabled = enable; }
             }
         }
     }
@@ -177,23 +181,29 @@ pub fn sync_light_components(
     mut spot_lights: Query<(&LightSource, &mut SpotLight, &mut Transform)>,
     new_lights: Query<(Entity, &LightSource), (Without<PointLight>, Without<SpotLight>)>,
 ) {
-    // Update existing PointLights
+    // Update existing PointLights — only write when the value actually
+    // changes so unchanged lights don't get re-extracted to the render
+    // world every frame.
     for (ls, mut pl) in &mut point_lights {
-        pl.color = ls.color;
-        pl.intensity = ls.intensity * INTENSITY_SCALE;
-        pl.range = ls.outer_radius;
+        let new_intensity = ls.intensity * INTENSITY_SCALE;
+        if pl.color != ls.color { pl.color = ls.color; }
+        if pl.intensity != new_intensity { pl.intensity = new_intensity; }
+        if pl.range != ls.outer_radius { pl.range = ls.outer_radius; }
     }
 
     // Update existing SpotLights
     for (ls, mut sl, mut tf) in &mut spot_lights {
-        sl.color = ls.color;
-        sl.intensity = ls.intensity * INTENSITY_SCALE;
-        sl.range = ls.outer_radius;
+        let new_intensity = ls.intensity * INTENSITY_SCALE;
+        if sl.color != ls.color { sl.color = ls.color; }
+        if sl.intensity != new_intensity { sl.intensity = new_intensity; }
+        if sl.range != ls.outer_radius { sl.range = ls.outer_radius; }
         if let LightShape::Cone { direction, angle } = ls.shape {
-            sl.outer_angle = (angle * 0.5).min(FRAC_PI_2 - 0.01);
-            sl.inner_angle = angle * 0.15;
-            // Rotate transform to face cone direction
-            tf.rotation = Quat::from_rotation_z(direction);
+            let outer = (angle * 0.5).min(FRAC_PI_2 - 0.01);
+            let inner = angle * 0.15;
+            if sl.outer_angle != outer { sl.outer_angle = outer; }
+            if sl.inner_angle != inner { sl.inner_angle = inner; }
+            let new_rot = Quat::from_rotation_z(direction);
+            if tf.rotation != new_rot { tf.rotation = new_rot; }
         }
     }
 

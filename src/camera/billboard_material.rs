@@ -54,8 +54,25 @@ fn push_def_if_missing(defs: &mut Vec<ShaderDefVal>, name: &str) {
 }
 
 impl MaterialExtension for BillboardDepthExtension {
-    // Depth-displaced prepass disabled — causes pipeline creation failure
-    // that silently prevents all billboard rendering. Needs investigation
-    // with WGPU_BACKEND_DEBUG=1 to see the exact validation error.
-    // StandardMaterial's built-in prepass handles flat alpha-mask shadows.
+    fn prepass_vertex_shader() -> ShaderRef {
+        "shaders/billboard_shadow_prepass_vertex.wgsl".into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        "shaders/billboard_shadow_prepass.wgsl".into()
+    }
+
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        push_def_if_missing(&mut descriptor.vertex.shader_defs, "VERTEX_UVS_A");
+        if let Some(ref mut frag) = descriptor.fragment {
+            push_def_if_missing(&mut frag.shader_defs, "VERTEX_UVS_A");
+        }
+        Ok(())
+    }
 }
+

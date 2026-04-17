@@ -9,7 +9,8 @@ pub mod terrain_material;
 pub mod tiled_physics_3d;
 
 use avian3d::prelude::*;
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
+#[cfg(feature = "dev_tools")]
 use bevy::pbr::wireframe::WireframeConfig;
 use bevy::prelude::*;
 use bevy_ecs_tiled::prelude::*;
@@ -31,10 +32,16 @@ impl Plugin for MapPlugin {
         app.add_plugins(TiledPlugin::default())
             .add_plugins(TiledPhysicsPlugin::<tiled_physics_3d::TiledPhysics3dBackend>::default())
             .add_plugins(PhysicsPlugins::default().with_length_unit(DEFAULT_TILE_SIZE))
-            .add_plugins(PhysicsDebugPlugin::default())
             .add_plugins(MaterialTilemapPlugin::<TerrainMaterial>::default())
-            .add_plugins(FrameTimeDiagnosticsPlugin::default())
-            .add_plugins(LogDiagnosticsPlugin::default())
+            .add_plugins(FrameTimeDiagnosticsPlugin::default());
+
+        // PhysicsDebugPlugin registers per-frame systems that iterate every
+        // physics entity even when gizmo rendering is disabled — keep it out
+        // of release builds.
+        #[cfg(feature = "dev_tools")]
+        app.add_plugins(PhysicsDebugPlugin::default());
+
+        app
             .insert_resource(Gravity(Vec3::ZERO))
             .init_resource::<MapBounds>()
             .init_resource::<ElevationConfig>()
@@ -42,26 +49,27 @@ impl Plugin for MapPlugin {
             .init_resource::<elevation::ElevationHeights>()
             .init_resource::<slope::SlopeHeightMaps>();
 
-        app
-            .add_systems(Startup, disable_physics_debug)
-            .add_systems(
-                Update,
-                (
-                    collision::corner_slip_system
-                        .run_if(in_state(GameState::Overworld).or(in_state(GameState::Combat))),
-                    terrain_material::build_terrain_and_attach_material,
-                    slope::compute_slope_height_maps
-                        .after(terrain_material::build_terrain_and_attach_material),
-                    elevation::setup_elevation_meshes
-                        .after(slope::compute_slope_height_maps),
-                    slope::generate_mesh_slope_colliders
-                        .after(slope::compute_slope_height_maps),
-                    terrain_edges::generate_edge_colliders,
-                    update_map_bounds,
-                    toggle_debug_overlay,
-                    update_fps_display,
-                ),
-            );
+        app.add_systems(
+            Update,
+            (
+                collision::corner_slip_system
+                    .run_if(in_state(GameState::Overworld).or(in_state(GameState::Combat))),
+                terrain_material::build_terrain_and_attach_material,
+                slope::compute_slope_height_maps
+                    .after(terrain_material::build_terrain_and_attach_material),
+                elevation::setup_elevation_meshes
+                    .after(slope::compute_slope_height_maps),
+                slope::generate_mesh_slope_colliders
+                    .after(slope::compute_slope_height_maps),
+                terrain_edges::generate_edge_colliders,
+                update_map_bounds,
+                update_fps_display,
+            ),
+        );
+
+        #[cfg(feature = "dev_tools")]
+        app.add_systems(Startup, disable_physics_debug)
+            .add_systems(Update, toggle_debug_overlay);
     }
 }
 
@@ -83,6 +91,7 @@ fn update_map_bounds(
 }
 
 /// Start with physics debug gizmos disabled and rendered above terrain.
+#[cfg(feature = "dev_tools")]
 fn disable_physics_debug(mut config_store: ResMut<GizmoConfigStore>) {
     // Disable physics gizmos by default, set to render on top when enabled
     let (gizmo_config, physics_config) = config_store.config_mut::<PhysicsGizmos>();
@@ -95,6 +104,7 @@ fn disable_physics_debug(mut config_store: ResMut<GizmoConfigStore>) {
 struct FpsText;
 
 /// F3 toggles debug overlay: physics collider gizmos + FPS counter + wireframe.
+#[cfg(feature = "dev_tools")]
 fn toggle_debug_overlay(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,

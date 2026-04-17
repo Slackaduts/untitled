@@ -619,11 +619,13 @@ pub fn setup_billboard_tiles(
                             .ok()
                             .and_then(|s| s.trim().parse::<f32>().ok())
                             .unwrap_or(0.0)
-                            * (quad_h / 2.0) // scale from mesh units to world units
+                            // Scale from mesh units to world units at a quarter
+                            // of the billboard height. Half was too aggressive —
+                            // at low sun elevations the vertical extrusion cast
+                            // shadows stretching several tiles horizontally.
+                            * (quad_h / 4.0)
                     } else {
-                        // No depth map: uniform protrusion gives some thickness
-                        // so shadows aren't paper-flat. ~25% of billboard height.
-                        quad_h * 0.25
+                        quad_h * 0.125
                     };
 
                     let mat = bb_materials.add(
@@ -631,7 +633,12 @@ pub fn setup_billboard_tiles(
                             base: StandardMaterial {
                                 base_color_texture: Some(comp_tex_handle.clone()),
                                 alpha_mode: AlphaMode::Mask(0.5),
-                                unlit: true,
+                                unlit: false,
+                                // Fully matte diffuse: no specular highlights
+                                // that would desaturate pixel-art colors.
+                                perceptual_roughness: 1.0,
+                                metallic: 0.0,
+                                reflectance: 0.0,
                                 double_sided: true,
                                 cull_mode: None,
                                 ..default()
@@ -639,7 +646,14 @@ pub fn setup_billboard_tiles(
                             extension: super::billboard_material::BillboardDepthExtension {
                                 depth_params: super::billboard_material::BillboardDepthParams {
                                     max_depth,
-                                    alpha_cutoff: 0.5,
+                                    // Shadow-only cutoff. Main pass uses
+                                    // StandardMaterial's AlphaMode::Mask(0.5).
+                                    // Higher threshold here keeps only the
+                                    // high-alpha core of tessellation-edge
+                                    // triangles, killing tapered "spider-leg"
+                                    // shadows that form where opaque vertices
+                                    // neighbor transparent ones.
+                                    alpha_cutoff: 0.85,
                                     has_depth_map: if depth_exists { 1 } else { 0 },
                                     _pad: 0.0,
                                 },
@@ -755,7 +769,9 @@ pub fn spawn_object_lights(
             let local = Vec3::new(
                 (light_def.offset_x - 0.5) * bb_h,
                 light_def.offset_y * bb_h,
-                0.0,
+                // Push forward past the depth-displaced shadow volume (max_depth
+                // is up to bb_h * 0.5) so the point light doesn't self-occlude.
+                bb_h * 0.55,
             );
             let light_pos = bb_tf.translation + bb_tf.rotation * local;
 
@@ -902,30 +918,61 @@ fn create_tiled_uv_quad(
         .with_inserted_indices(Indices::U32(indices))
 }
 
-/// Create a billboard quad with a custom origin offset.
-/// `offset_x`: how far right the origin is from the left edge of the quad.
-/// `offset_y`: how far up the origin is from the bottom edge.
-/// The mesh is positioned so local (0,0) is at the origin point.
+/// Create a tessellated billboard mesh with a custom origin offset.
+///
+/// The mesh is a flat quad tessellated into an NxN grid of vertices so the
+/// shadow prepass vertex shader has enough sample points to reconstruct a
+/// full 3D heightfield from the sprite's depth map. From the sun's view,
+/// this extruded geometry casts a proper silhouette regardless of the sun's
+/// angle relative to the billboard face — a flat quad would rasterize to
+/// zero area when viewed edge-on, producing no shadow at all.
+///
+/// The main render pass uses StandardMaterial's default vertex shader which
+/// does not displace vertices, so the main view still sees a flat sprite.
 fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
     let left = -offset_x;
     let right = w - offset_x;
     let bottom = -offset_y;
     let top = h - offset_y;
 
-    let vertices = vec![
-        [left, bottom, 0.0],
-        [right, bottom, 0.0],
-        [right, top, 0.0],
-        [left, top, 0.0],
-    ];
-    let normals = vec![[0.0, 0.0, 1.0]; 4];
-    let uvs = vec![
-        [0.0, 1.0],
-        [1.0, 1.0],
-        [1.0, 0.0],
-        [0.0, 0.0],
-    ];
-    let indices = vec![0u32, 1, 2, 0, 2, 3];
+    // 16x16 cells = 17x17 = 289 vertices. Coarser tessellations produce
+    // visible polygons in the shadow silhouette and "spider-leg" artifacts
+    // where triangles span from opaque (high depth) to transparent (zero
+    // depth) vertices and the interpolated alpha stays above cutoff along
+    // a tapered strip. Higher tessellation shrinks those strips below a
+    // shadow-map texel.
+    const RES: u32 = 16;
+    let verts_per_side = RES + 1;
+    let total_verts = (verts_per_side * verts_per_side) as usize;
+
+    let mut vertices: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(total_verts);
+
+    for j in 0..verts_per_side {
+        for i in 0..verts_per_side {
+            let fx = i as f32 / RES as f32;
+            let fy = j as f32 / RES as f32;
+            let x = left + fx * (right - left);
+            let y = bottom + fy * (top - bottom);
+            vertices.push([x, y, 0.0]);
+            normals.push([0.0, 0.0, 1.0]);
+            // v=1 at bottom, v=0 at top to match original sprite UV orientation
+            uvs.push([fx, 1.0 - fy]);
+        }
+    }
+
+    let mut indices: Vec<u32> = Vec::with_capacity((RES * RES * 6) as usize);
+    for j in 0..RES {
+        for i in 0..RES {
+            let row_stride = verts_per_side;
+            let i0 = j * row_stride + i;
+            let i1 = j * row_stride + i + 1;
+            let i2 = (j + 1) * row_stride + i + 1;
+            let i3 = (j + 1) * row_stride + i;
+            indices.extend_from_slice(&[i0, i1, i2, i0, i2, i3]);
+        }
+    }
 
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)

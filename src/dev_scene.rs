@@ -47,8 +47,12 @@ fn spawn_dev_scene(
     commands.spawn((
         TiledMap(asset_server.load("maps/test.tmx")),
         TiledPhysicsSettings::<crate::map::tiled_physics_3d::TiledPhysics3dBackend>::default(),
-        // Shift terrain east by half a tile for visual alignment.
-        Transform::from_xyz(crate::map::DEFAULT_TILE_SIZE * 0.5, 0.0, 0.0),
+        // Shift terrain east and north by half a tile for visual alignment.
+        Transform::from_xyz(
+            crate::map::DEFAULT_TILE_SIZE * 0.5,
+            crate::map::DEFAULT_TILE_SIZE * 0.5,
+            0.0,
+        ),
     ));
 
     // ── Player (blue square with physics) ────────────────────────────

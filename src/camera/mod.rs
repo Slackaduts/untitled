@@ -2,12 +2,13 @@ pub mod billboard_material;
 pub mod combat;
 pub mod cutscene;
 pub mod follow;
+pub mod shadow_mesh;
 
 use bevy::audio::SpatialListener;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
+use bevy::camera::visibility::RenderLayers;
 
-use bevy::light::cluster::ClusterConfig;
 use bevy::light::ShadowFilteringMethod;
 use crate::app_state::GameState;
 use crate::sound::spatial::GameListener;
@@ -34,6 +35,11 @@ impl Plugin for CameraPlugin {
                     combat::combat_grid_fade,
                     combat::spawn_object_lights
                         .after(combat::setup_billboard_tiles),
+                    shadow_mesh::spawn_shadow_meshes
+                        .after(combat::setup_billboard_tiles)
+                        .after(combat::billboard_system),
+                    shadow_mesh::propagate_shadow_mesh_layers
+                        .after(shadow_mesh::spawn_shadow_meshes),
                     #[cfg(feature = "dev_tools")]
                     crate::billboard::object_editor::update_object_light_positions
                         .after(combat::billboard_system),
@@ -66,12 +72,10 @@ fn spawn_camera(mut commands: Commands) {
         SpatialListener::new(400.0),
         GameListener,
         CombatCamera3d,
-        // Single cluster: all lights evaluated for every pixel. No spatial
-        // subdivision issues with our 2.5D tilted camera. Fine for <50 lights.
-        ClusterConfig::Single,
         // Gaussian PCF: 5x5 filter kernel for soft shadow edges
         ShadowFilteringMethod::Gaussian,
         Msaa::Off,
-        Smaa { preset: SmaaPreset::Ultra },
+        Smaa { preset: SmaaPreset::Low },
+        RenderLayers::layer(0),
     ));
 }

@@ -179,37 +179,39 @@ pub fn parent_tile_lights_to_billboards(
         (Entity, &TileLightSource),
         Without<TileLightParented>,
     >,
-    billboard_quads: Query<(Entity, &Transform), With<BillboardTileQuad>>,
+    billboard_quads: Query<
+        (Entity, &Transform, &crate::camera::combat::BillboardHeight),
+        With<BillboardTileQuad>,
+    >,
 ) {
     if !billboard_ready.0 || unparented_lights.is_empty() {
         return;
     }
 
     for (light_entity, tile_light) in &unparented_lights {
-        // Find the billboard quad whose origin is closest to this light.
-        // Billboard quads are positioned at their center-x, bottom-y.
-        let mut best: Option<(Entity, f32, Vec3)> = None;
+        let mut best: Option<(Entity, f32, Vec3, f32)> = None;
 
-        for (quad_entity, quad_tf) in &billboard_quads {
+        for (quad_entity, quad_tf, bb_height) in &billboard_quads {
             let quad_pos = quad_tf.translation.truncate();
             let dist = quad_pos.distance(tile_light.world_pos);
             if best.is_none() || dist < best.unwrap().1 {
-                best = Some((quad_entity, dist, quad_tf.translation));
+                best = Some((quad_entity, dist, quad_tf.translation, bb_height.height));
             }
         }
 
-        if let Some((quad_entity, _, quad_translation)) = best {
-            // Compute local offset from quad's transform origin
+        if let Some((quad_entity, _, quad_translation, bb_h)) = best {
             let local_x = tile_light.world_pos.x - quad_translation.x;
             let local_y = tile_light.world_pos.y - quad_translation.y;
+            // Push forward past the depth-displaced shadow volume (max_depth
+            // is up to bb_h * 0.5) so the point light doesn't self-occlude.
+            let local_z = bb_h * 0.55;
 
             commands.entity(light_entity).insert((
                 TileLightParented,
                 ChildOf(quad_entity),
-                Transform::from_xyz(local_x, local_y, 0.0),
+                Transform::from_xyz(local_x, local_y, local_z),
             ));
         } else {
-            // No billboard quads exist — mark as parented to skip future checks
             commands.entity(light_entity).insert(TileLightParented);
         }
     }

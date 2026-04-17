@@ -96,6 +96,7 @@ pub fn compute_ambient_from_time(
 /// Spawns the sun DirectionalLight entity at startup.
 pub fn spawn_sun_light(mut commands: Commands) {
     use bevy::light::cascade::CascadeShadowConfigBuilder;
+    use bevy::camera::visibility::RenderLayers;
 
     commands.spawn((
         SunLight,
@@ -110,21 +111,20 @@ pub fn spawn_sun_light(mut commands: Commands) {
         Transform::from_rotation(
             Quat::from_euler(EulerRot::YXZ, PI * 0.5, -(FRAC_PI_2 - 60.0_f32.to_radians()), 0.0),
         ),
-        // Configure cascades for our 2.5D camera at Z=900.
-        // Scene is ~900-1200 units from camera depending on position.
         CascadeShadowConfigBuilder {
-            num_cascades: 4,
-            minimum_distance: 500.0,
-            maximum_distance: 2500.0,
-            first_cascade_far_bound: 800.0,
+            num_cascades: 2,
+            minimum_distance: 600.0,
+            maximum_distance: 1800.0,
+            first_cascade_far_bound: 1000.0,
             overlap_proportion: 0.3,
         }
         .build(),
+        RenderLayers::from_layers(&[0, crate::camera::shadow_mesh::SHADOW_CASTER_LAYER]),
     ));
-    // Use higher resolution shadow maps for the large world-unit scale
-    commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
-    // Low-res point light shadows: soft and cheap (6 faces × 512px each)
-    commands.insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+    commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 2048 });
+    // 256px per cube face × 6 faces = ~1.5MB per shadow-casting point light,
+    // and 4x lower fill cost vs 512px. Still readable at typical camera distance.
+    commands.insert_resource(bevy::light::PointLightShadowMap { size: 256 });
 }
 
 /// Rotates the sun DirectionalLight based on TimeOfDay.
