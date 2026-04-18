@@ -23,6 +23,7 @@
             pkg-config
             clang
             mold
+            gh
           ];
 
           buildInputs = with pkgs; [
