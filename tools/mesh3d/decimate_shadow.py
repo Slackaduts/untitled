@@ -1,27 +1,33 @@
 #!/usr/bin/env python3
-"""Generate low-poly shadow meshes by cleaning + QEM-decimating mesh.glb.
+"""Generate low-poly watertight shadow meshes from mesh.glb.
 
 For each sprite directory containing mesh.glb (the full Hunyuan
-reconstruction), this script:
-  1. Loads the mesh and welds near-duplicate vertices, removes degenerate
-     and duplicate faces, drops unreferenced vertices, and reconciles
-     winding. Hunyuan output is non-manifold (open edges, self-intersections)
-     and aggressive QEM on raw output produces shattered geometry — the
-     cleaning pass makes the input something QEM can actually handle.
-  2. Runs quadric-error decimation to a target triangle count.
-  3. Sanity-checks the output. If it looks shattered (too few triangles, or
-     fragmented into many disconnected components), falls back to voxel-
-     remeshing, which always produces a clean manifold.
-  4. Writes the result to shadow.glb (overwriting whatever's there).
+reconstruction):
+  1. Load and clean the mesh topology (weld vertices, drop degenerate and
+     duplicate faces, reconcile winding).
+  2. Voxel-remesh at --prepass-res to force a watertight manifold. Hunyuan
+     output is non-manifold (open edges, self-intersections); running QEM
+     directly on it leaves the output with holes — fine for a silhouette
+     from one angle, but the shadow pass sees through the holes and the
+     cast shadow looks "unfolded" / hollowed-out. Marching cubes on a
+     filled voxel grid is always manifold, so the subsequent QEM operates
+     on a clean input and its output stays closed.
+  3. QEM-decimate the voxel remesh to --target triangles. Fine-grained
+     surface detail lost, but silhouette and enclosure are preserved.
+  4. Fallback: if QEM output still looks shattered, use the raw voxel
+     remesh at --fallback-res (fewer triangles, blockier) which is
+     guaranteed manifold.
+  5. Write to shadow.glb.
 
 Dependencies:
     pip install trimesh fast-simplification numpy
 
 Usage:
-    python decimate_shadow.py [--target N] [--voxel-res R] sprite_dir...
+    python decimate_shadow.py [--target N] sprite_dir...
 
-    --target sets the QEM target triangle count (default 1500).
-    --voxel-res sets the fallback voxel grid resolution (default 48).
+    --target         QEM target triangle count (default 1500).
+    --prepass-res    Voxel resolution for the watertightening pass (96).
+    --fallback-res   Voxel resolution for the shatter-fallback (48).
 """
 
 import argparse
@@ -120,49 +126,66 @@ def looks_shattered(mesh, target_faces):
     return False
 
 
-def process(sprite_dir: Path, target_faces: int, voxel_res: int) -> bool:
+def process(sprite_dir: Path, target_faces: int,
+            prepass_res: int, fallback_res: int) -> bool:
     mesh_path = sprite_dir / "mesh.glb"
     shadow_path = sprite_dir / "shadow.glb"
 
-    mesh = load_concatenated(mesh_path)
-    if mesh is None:
+    raw = load_concatenated(mesh_path)
+    if raw is None:
         print(f"FAIL {sprite_dir.name}: no geometry in mesh.glb")
         return False
 
-    orig_faces = len(mesh.faces)
-    mesh = clean(mesh)
-    cleaned_faces = len(mesh.faces)
+    orig_faces = len(raw.faces)
+    raw = clean(raw)
+    cleaned_faces = len(raw.faces)
 
+    # Watertighten: voxel remesh + marching cubes → guaranteed manifold.
     try:
-        decimated = decimate_qem(mesh, target_faces)
-        method = "qem"
+        watertight = voxel_remesh(raw, prepass_res)
+    except Exception as e:
+        print(f"FAIL {sprite_dir.name}: voxel prepass raised {e}")
+        return False
+
+    prepass_faces = len(watertight.faces)
+
+    # Now decimate the manifold. QEM on manifold input produces manifold
+    # output, so the result stays closed.
+    method = "qem"
+    try:
+        decimated = decimate_qem(watertight, target_faces)
     except Exception as e:
         print(f"  {sprite_dir.name}: QEM raised {e}; using voxel fallback")
-        decimated = voxel_remesh(mesh, voxel_res)
-        method = "voxel"
+        decimated = voxel_remesh(raw, fallback_res)
+        method = "voxel-fallback"
 
     if method == "qem" and looks_shattered(decimated, target_faces):
         print(f"  {sprite_dir.name}: QEM output looks shattered "
               f"({len(decimated.faces)} faces); using voxel fallback")
-        decimated = voxel_remesh(mesh, voxel_res)
-        method = "voxel"
+        decimated = voxel_remesh(raw, fallback_res)
+        method = "voxel-fallback"
 
     out_faces = len(decimated.faces)
     decimated.export(str(shadow_path), file_type="glb")
     print(f"OK   {sprite_dir.name}: {orig_faces} → cleaned {cleaned_faces} "
-          f"→ {method} {out_faces} faces")
+          f"→ watertight {prepass_faces} → {method} {out_faces} faces")
     return True
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Decimate Hunyuan mesh.glb into a low-poly shadow.glb.")
+        description="Decimate Hunyuan mesh.glb into a watertight low-poly shadow.glb.")
     p.add_argument("paths", nargs="+",
                    help="Sprite directory paths (or glob patterns).")
     p.add_argument("--target", type=int, default=1500,
                    help="QEM target triangle count (default 1500).")
-    p.add_argument("--voxel-res", type=int, default=48,
-                   help="Fallback voxel grid resolution (default 48).")
+    p.add_argument("--prepass-res", type=int, default=96,
+                   help="Voxel resolution for the watertightening pass "
+                        "(default 96). Higher = smoother input to QEM but "
+                        "slower and more memory.")
+    p.add_argument("--fallback-res", type=int, default=48,
+                   help="Voxel resolution for the shatter-fallback "
+                        "(default 48).")
     args = p.parse_args()
 
     dirs = resolve_sprite_dirs(args.paths, required_file="mesh.glb")
@@ -170,7 +193,8 @@ def main():
         print("no sprite dirs found with mesh.glb")
         sys.exit(1)
 
-    ok = sum(process(d, args.target, args.voxel_res) for d in dirs)
+    ok = sum(process(d, args.target, args.prepass_res, args.fallback_res)
+             for d in dirs)
     print(f"\nDone: {ok}/{len(dirs)} sprites processed.")
     sys.exit(0 if ok == len(dirs) else 1)
 
