@@ -3,31 +3,31 @@
 
 For each sprite directory containing mesh.glb (the full Hunyuan
 reconstruction):
-  1. Load and clean the mesh topology (weld vertices, drop degenerate and
-     duplicate faces, reconcile winding).
-  2. Voxel-remesh at --prepass-res to force a watertight manifold. Hunyuan
-     output is non-manifold (open edges, self-intersections); running QEM
-     directly on it leaves the output with holes — fine for a silhouette
-     from one angle, but the shadow pass sees through the holes and the
-     cast shadow looks "unfolded" / hollowed-out. Marching cubes on a
-     filled voxel grid is always manifold, so the subsequent QEM operates
-     on a clean input and its output stays closed.
-  3. QEM-decimate the voxel remesh to --target triangles. Fine-grained
-     surface detail lost, but silhouette and enclosure are preserved.
-  4. Fallback: if QEM output still looks shattered, use the raw voxel
-     remesh at --fallback-res (fewer triangles, blockier) which is
-     guaranteed manifold.
-  5. Write to shadow.glb.
+
+  1. Load and clean the raw mesh (weld near-duplicate vertices, drop
+     degenerate and duplicate faces, remove unreferenced vertices,
+     reconcile winding).
+  2. Sample a dense oriented point cloud from the surface.
+  3. Screened Poisson surface reconstruction (open3d) — fits an implicit
+     function to the points and extracts a smooth isosurface. Always
+     manifold; preserves shape better than voxel remeshing because it
+     doesn't grid-align.
+  4. open3d QEM decimation to --target triangles. Open3d's QEM is more
+     conservative about topology than fast-simplification's wrapper.
+  5. PyMeshFix repair pass — finds every boundary edge and stitches it via
+     constrained triangulation. Iterates up to --repair-attempts times.
+     Required for high-genus shapes (trees, foliage) where Poisson alone
+     can't get a closed isosurface.
+  6. Write shadow.glb.
+
+Each output line ends with `[watertight]` or `[OPEN boundary=N non_manifold=M]`
+so you can see exactly why anything that's still open isn't closed.
 
 Dependencies:
-    pip install trimesh fast-simplification numpy
+    pip install trimesh fast-simplification open3d pymeshfix numpy
 
 Usage:
-    python decimate_shadow.py [--target N] sprite_dir...
-
-    --target         QEM target triangle count (default 1500).
-    --prepass-res    Voxel resolution for the watertightening pass (96).
-    --fallback-res   Voxel resolution for the shatter-fallback (48).
+    python decimate_shadow.py [--target N] [--depth D] [--samples S] sprite_dir...
 """
 
 import argparse
@@ -79,7 +79,7 @@ def load_concatenated(path):
 
 
 def clean(mesh):
-    """Best-effort topology cleanup before decimation."""
+    """Best-effort topology cleanup before Poisson sampling."""
     import trimesh
     mesh.merge_vertices(merge_norm=True, merge_tex=False)
     mesh.update_faces(mesh.nondegenerate_faces())
@@ -92,42 +92,105 @@ def clean(mesh):
     return mesh
 
 
-def decimate_qem(mesh, target_faces):
-    """QEM via fast-simplification (called through trimesh)."""
-    return mesh.simplify_quadric_decimation(face_count=target_faces)
+def poisson_and_decimate(mesh, depth: int, samples: int, target_faces: int):
+    """Screened Poisson reconstruction + open3d QEM. Both inside open3d to
+    avoid the trimesh round-trip and fast-simplification's looser topology.
+    No AABB crop — the crop cuts triangles and produces boundary edges; we
+    accept slight silhouette inflation for strict manifoldness."""
+    import open3d as o3d
+    import trimesh
+
+    points, face_idx = trimesh.sample.sample_surface(mesh, count=samples)
+    normals = mesh.face_normals[face_idx]
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.asarray(points))
+    pcd.normals = o3d.utility.Vector3dVector(np.asarray(normals))
+
+    with o3d.utility.VerbosityContextManager(o3d.utility.VerbosityLevel.Error):
+        o3d_mesh, _densities = (
+            o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
+                pcd, depth=depth, width=0, scale=1.1, linear_fit=False
+            )
+        )
+
+    poisson_faces = len(o3d_mesh.triangles)
+
+    o3d_mesh = o3d_mesh.simplify_quadric_decimation(
+        target_number_of_triangles=target_faces
+    )
+    o3d_mesh.remove_duplicated_vertices()
+    o3d_mesh.remove_duplicated_triangles()
+    o3d_mesh.remove_degenerate_triangles()
+    o3d_mesh.remove_unreferenced_vertices()
+
+    out = trimesh.Trimesh(
+        vertices=np.asarray(o3d_mesh.vertices),
+        faces=np.asarray(o3d_mesh.triangles),
+        process=False,
+    )
+    return out, poisson_faces
 
 
-def voxel_remesh(mesh, resolution):
-    """Re-voxelize at low resolution and march cubes. Always manifold,
-    predictable triangle count, but loses fine surface detail."""
-    pitch = float(max(mesh.extents)) / resolution
-    if pitch <= 0:
-        return mesh
-    return mesh.voxelized(pitch=pitch).fill().marching_cubes
+def force_watertight(mesh, max_attempts: int = 3):
+    """MeshFix-based repair using the low-level PyTMesh API.
+
+    `fill_small_boundaries(nbe=0)` patches every boundary regardless of
+    vertex count. We deliberately do NOT call `tin.clean()` — that step
+    iteratively deletes self-intersecting triangles, and on Poisson output
+    of high-genus shapes (trees) the cascade can wipe out most of the mesh.
+    Self-intersections don't leak light through the shadow caster; holes do.
+    So we tolerate intersections, fix only the holes.
+
+    `process=True` on the trimesh constructor merges spatially-duplicate
+    vertices that pymeshfix leaves behind — without it, trimesh's
+    `is_watertight` edge-counting reports false boundaries.
+
+    If a repair attempt collapses the mesh below 10% of its input face
+    count, we keep the pre-repair version (better OPEN than empty).
+    """
+    import pymeshfix
+    import trimesh
+
+    pre_faces = len(mesh.faces)
+    best = mesh
+    for _ in range(max_attempts):
+        tin = pymeshfix.PyTMesh()
+        tin.load_array(
+            np.ascontiguousarray(best.vertices, dtype=np.float64),
+            np.ascontiguousarray(best.faces, dtype=np.int32),
+        )
+        tin.fill_small_boundaries(nbe=0, refine=True)
+        v, f = tin.return_arrays()
+
+        candidate = trimesh.Trimesh(
+            vertices=np.asarray(v),
+            faces=np.asarray(f),
+            process=True,
+        )
+        # Bail if repair destroyed the mesh.
+        if len(candidate.faces) < max(4, pre_faces * 0.1):
+            return best
+
+        best = candidate
+        if best.is_watertight:
+            return best
+
+    return best
 
 
-def looks_shattered(mesh, target_faces):
-    """Heuristic for QEM output that fragmented instead of decimating."""
-    if len(mesh.faces) < 50:
-        return True
-    if len(mesh.faces) < target_faces * 0.1:
-        return True
-    try:
-        components = mesh.split(only_watertight=False)
-    except Exception:
-        return False
-    if len(components) > 10:
-        return True
-    # If most faces ended up in tiny islands, the mesh fragmented.
-    component_face_counts = sorted((len(c.faces) for c in components),
-                                    reverse=True)
-    if component_face_counts and component_face_counts[0] < 0.5 * len(mesh.faces):
-        return True
-    return False
+def open_edge_diagnostic(mesh):
+    """For an OPEN mesh, count boundary and non-manifold edges to see which
+    kind of failure we're hitting."""
+    edges_sorted = mesh.edges_sorted
+    _unique, counts = np.unique(edges_sorted, axis=0, return_counts=True)
+    boundary = int((counts == 1).sum())
+    non_manifold = int((counts > 2).sum())
+    return f"boundary={boundary} non_manifold={non_manifold}"
 
 
 def process(sprite_dir: Path, target_faces: int,
-            prepass_res: int, fallback_res: int) -> bool:
+            depth: int, samples: int, repair_attempts: int) -> bool:
     mesh_path = sprite_dir / "mesh.glb"
     shadow_path = sprite_dir / "shadow.glb"
 
@@ -139,53 +202,56 @@ def process(sprite_dir: Path, target_faces: int,
     orig_faces = len(raw.faces)
     raw = clean(raw)
     cleaned_faces = len(raw.faces)
-
-    # Watertighten: voxel remesh + marching cubes → guaranteed manifold.
-    try:
-        watertight = voxel_remesh(raw, prepass_res)
-    except Exception as e:
-        print(f"FAIL {sprite_dir.name}: voxel prepass raised {e}")
+    if cleaned_faces < 4:
+        print(f"FAIL {sprite_dir.name}: nothing left after cleaning")
         return False
 
-    prepass_faces = len(watertight.faces)
-
-    # Now decimate the manifold. QEM on manifold input produces manifold
-    # output, so the result stays closed.
-    method = "qem"
     try:
-        decimated = decimate_qem(watertight, target_faces)
+        decimated, poisson_faces = poisson_and_decimate(
+            raw, depth=depth, samples=samples, target_faces=target_faces
+        )
     except Exception as e:
-        print(f"  {sprite_dir.name}: QEM raised {e}; using voxel fallback")
-        decimated = voxel_remesh(raw, fallback_res)
-        method = "voxel-fallback"
+        print(f"FAIL {sprite_dir.name}: {e}")
+        return False
 
-    if method == "qem" and looks_shattered(decimated, target_faces):
-        print(f"  {sprite_dir.name}: QEM output looks shattered "
-              f"({len(decimated.faces)} faces); using voxel fallback")
-        decimated = voxel_remesh(raw, fallback_res)
-        method = "voxel-fallback"
+    if len(decimated.faces) < 4:
+        print(f"FAIL {sprite_dir.name}: empty after decimation")
+        return False
+
+    # Always run pymeshfix as the final pass — even when decimation produces
+    # a closed mesh, the repair is a no-op and cheap; when it doesn't, this
+    # is the step that actually closes high-genus shapes.
+    try:
+        decimated = force_watertight(decimated, max_attempts=repair_attempts)
+    except Exception as e:
+        print(f"  {sprite_dir.name}: pymeshfix raised {e}; saving as-is")
+
+    if decimated.is_watertight:
+        tag = "[watertight]"
+    else:
+        tag = f"[OPEN {open_edge_diagnostic(decimated)}]"
 
     out_faces = len(decimated.faces)
     decimated.export(str(shadow_path), file_type="glb")
     print(f"OK   {sprite_dir.name}: {orig_faces} → cleaned {cleaned_faces} "
-          f"→ watertight {prepass_faces} → {method} {out_faces} faces")
+          f"→ poisson {poisson_faces} → fix {out_faces} faces {tag}")
     return True
 
 
 def main():
     p = argparse.ArgumentParser(
-        description="Decimate Hunyuan mesh.glb into a watertight low-poly shadow.glb.")
+        description="Decimate Hunyuan mesh.glb into a watertight low-poly shadow.glb "
+                    "via Poisson reconstruction + QEM + PyMeshFix repair.")
     p.add_argument("paths", nargs="+",
                    help="Sprite directory paths (or glob patterns).")
     p.add_argument("--target", type=int, default=1500,
                    help="QEM target triangle count (default 1500).")
-    p.add_argument("--prepass-res", type=int, default=96,
-                   help="Voxel resolution for the watertightening pass "
-                        "(default 96). Higher = smoother input to QEM but "
-                        "slower and more memory.")
-    p.add_argument("--fallback-res", type=int, default=48,
-                   help="Voxel resolution for the shatter-fallback "
-                        "(default 48).")
+    p.add_argument("--depth", type=int, default=8,
+                   help="Poisson octree depth (default 8). 6=blobby, 10=fine.")
+    p.add_argument("--samples", type=int, default=60000,
+                   help="Surface points sampled before Poisson (default 60000).")
+    p.add_argument("--repair-attempts", type=int, default=3,
+                   help="Max iterations of pymeshfix repair (default 3).")
     args = p.parse_args()
 
     dirs = resolve_sprite_dirs(args.paths, required_file="mesh.glb")
@@ -193,7 +259,8 @@ def main():
         print("no sprite dirs found with mesh.glb")
         sys.exit(1)
 
-    ok = sum(process(d, args.target, args.prepass_res, args.fallback_res)
+    ok = sum(process(d, args.target, args.depth, args.samples,
+                     args.repair_attempts)
              for d in dirs)
     print(f"\nDone: {ok}/{len(dirs)} sprites processed.")
     sys.exit(0 if ok == len(dirs) else 1)
