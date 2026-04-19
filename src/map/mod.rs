@@ -82,6 +82,8 @@ impl Plugin for MapPlugin {
                     .run_if(has_unprocessed_tilemap_layers),
                 elevation::cull_offscreen_elevation_cameras
                     .after(elevation::setup_elevation_meshes),
+                elevation::track_elevation_viewport
+                    .after(elevation::setup_elevation_meshes),
                 update_map_bounds,
                 update_fps_display,
             ),

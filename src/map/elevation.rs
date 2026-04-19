@@ -58,6 +58,10 @@ pub struct ElevationMaterials {
     pub by_level: std::collections::HashMap<u8, Handle<crate::particles::gpu_lights::ParticleLitMaterial>>,
 }
 
+/// Marker: this elevation camera/mesh tracks the main camera viewport each frame.
+#[derive(Component)]
+pub struct ViewportTracked;
+
 /// Stores the computed Z height for each elevation level's floor.
 #[derive(Resource, Default)]
 pub struct ElevationHeights {
@@ -192,21 +196,31 @@ pub fn setup_elevation_meshes(
     for (&level, entities) in &elevation_groups {
         let rl = render_layer_for_elevation(level);
 
-        // For levels > 0 with known bounds, right-size the render target to the
-        // bounding box + padding instead of using full map resolution.
-        let pad = _tw * 2.0; // 2 tiles of padding for transition bleed
-        let (rt_min_x, rt_min_y, rt_max_x, rt_max_y, rt_w, rt_h) = if level > 0 {
-            if let Some(&(bmin_x, bmin_y, bmax_x, bmax_y)) = level_bounds.get(&level) {
-                let rmin_x = (bmin_x - pad).max(0.0);
-                let rmin_y = (bmin_y - pad).max(0.0);
-                let rmax_x = (bmax_x + pad).min(map_w);
-                let rmax_y = (bmax_y + pad).min(map_h);
-                (rmin_x, rmin_y, rmax_x, rmax_y, rmax_x - rmin_x, rmax_y - rmin_y)
-            } else {
-                (0.0, 0.0, map_w, map_h, map_w, map_h)
-            }
+        // Right-size render targets:
+        // - Level 0 (no slopes): viewport-sized RT that tracks the main camera.
+        //   Avoids rendering the entire map every frame.
+        // - Level 0 (with slopes): full-map RT (gridded mesh needs full UVs).
+        // - Levels > 0: bounding-box-sized RT (static, computed once).
+        let pad = _tw * 2.0;
+        let level_has_slopes = slope_maps.by_level.get(&level).is_some_and(|hm| hm.has_slopes());
+        let can_viewport_track = level == 0 && !level_has_slopes;
+
+        let (rt_min_x, rt_min_y, rt_max_x, rt_max_y, rt_w, rt_h, is_viewport_tracked) = if can_viewport_track {
+            // Viewport-sized: covers visible area + generous margin for perspective.
+            // Position updated each frame by track_elevation_viewport.
+            let vp_w = 2000.0;
+            let vp_h = 1800.0;
+            let cx = map_w * 0.5;
+            let cy = map_h * 0.5;
+            (cx - vp_w * 0.5, cy - vp_h * 0.5, cx + vp_w * 0.5, cy + vp_h * 0.5, vp_w, vp_h, true)
+        } else if let Some(&(bmin_x, bmin_y, bmax_x, bmax_y)) = level_bounds.get(&level) {
+            let rmin_x = (bmin_x - pad).max(0.0);
+            let rmin_y = (bmin_y - pad).max(0.0);
+            let rmax_x = (bmax_x + pad).min(map_w);
+            let rmax_y = (bmax_y + pad).min(map_h);
+            (rmin_x, rmin_y, rmax_x, rmax_y, rmax_x - rmin_x, rmax_y - rmin_y, false)
         } else {
-            (0.0, 0.0, map_w, map_h, map_w, map_h)
+            (0.0, 0.0, map_w, map_h, map_w, map_h, false)
         };
 
         let rt_center = Vec2::new((rt_min_x + rt_max_x) * 0.5, (rt_min_y + rt_max_y) * 0.5);
@@ -234,7 +248,7 @@ pub fn setup_elevation_meshes(
         rt_image.resize(extent);
         let rt_handle = images.add(rt_image);
 
-        commands.spawn((
+        let mut cam_cmds = commands.spawn((
             Camera2d,
             Camera {
                 order: -(level as isize) - 10,
@@ -255,6 +269,9 @@ pub fn setup_elevation_meshes(
             RenderLayers::layer(rl),
             ElevationRenderCam { level },
         ));
+        if is_viewport_tracked {
+            cam_cmds.insert(ViewportTracked);
+        }
 
         for &entity in entities {
             commands
@@ -303,7 +320,7 @@ pub fn setup_elevation_meshes(
         };
 
         let slope_hm = slope_maps.by_level.get(&level);
-        let has_slopes = slope_hm.is_some_and(|hm| hm.has_slopes());
+        let has_slopes = level_has_slopes;
 
         let mesh = if has_slopes {
             // ── Gridded mesh: one quad per tile with per-corner Z offsets ──
@@ -396,19 +413,22 @@ pub fn setup_elevation_meshes(
                     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]))
             )
         } else {
-            // ── Full map rectangle (level 0 without slopes) ──
-            meshes.add(Rectangle::new(map_w, map_h))
+            // ── Viewport-sized or full-map rectangle ──
+            meshes.add(Rectangle::new(rt_w, rt_h))
         };
 
         let qcx = (min_x + max_x) * 0.5;
         let qcy = (min_y + max_y) * 0.5;
 
-        commands.spawn((
+        let mut mesh_cmds = commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(mat),
             Transform::from_xyz(qcx, qcy, z),
             ElevationQuad { level },
         ));
+        if is_viewport_tracked {
+            mesh_cmds.insert(ViewportTracked);
+        }
 
         info!(
             "Elevation {level}: render layer {rl}, {} tilemap layer(s), quad at Z={z}, RT {}x{}",
@@ -478,5 +498,26 @@ pub fn cull_offscreen_elevation_cameras(
         }
 
         elev_cam.is_active = any_visible;
+    }
+}
+
+/// Moves viewport-tracked elevation cameras and meshes to follow the main camera.
+/// This keeps the level 0 RT centered on what the player can see, avoiding
+/// rendering the entire map every frame.
+pub fn track_elevation_viewport(
+    rect: Res<crate::camera::visible_rect::CameraVisibleRect>,
+    mut cameras: Query<&mut Transform, (With<ElevationRenderCam>, With<ViewportTracked>, Without<ElevationQuad>)>,
+    mut quads: Query<&mut Transform, (With<ElevationQuad>, With<ViewportTracked>, Without<ElevationRenderCam>)>,
+) {
+    let center = rect.center;
+
+    for mut cam_tf in &mut cameras {
+        cam_tf.translation.x = center.x;
+        cam_tf.translation.y = center.y;
+    }
+
+    for mut quad_tf in &mut quads {
+        quad_tf.translation.x = center.x;
+        quad_tf.translation.y = center.y;
     }
 }
