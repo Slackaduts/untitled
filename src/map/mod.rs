@@ -67,6 +67,8 @@ impl Plugin for MapPlugin {
             ),
         );
 
+        app.add_systems(Startup, spawn_fps_display);
+
         #[cfg(feature = "dev_tools")]
         app.add_systems(Startup, disable_physics_debug)
             .add_systems(Update, toggle_debug_overlay);
@@ -103,14 +105,31 @@ fn disable_physics_debug(mut config_store: ResMut<GizmoConfigStore>) {
 #[derive(Component)]
 struct FpsText;
 
-/// F3 toggles debug overlay: physics collider gizmos + FPS counter + wireframe.
+/// Spawns the FPS counter at startup so it's always visible.
+fn spawn_fps_display(mut commands: Commands) {
+    commands.spawn((
+        Text::new("FPS: --"),
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
+        TextColor(Color::srgb(1.0, 1.0, 0.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(5.0),
+            left: Val::Px(5.0),
+            ..default()
+        },
+        FpsText,
+    ));
+}
+
+/// F3 toggles debug overlay: physics collider gizmos + wireframe.
 #[cfg(feature = "dev_tools")]
 fn toggle_debug_overlay(
-    mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut config_store: ResMut<GizmoConfigStore>,
     mut wireframe_config: ResMut<WireframeConfig>,
-    fps_query: Query<Entity, With<FpsText>>,
 ) {
     if !keyboard.just_pressed(KeyCode::F3) {
         return;
@@ -118,33 +137,7 @@ fn toggle_debug_overlay(
 
     let (config, _) = config_store.config_mut::<PhysicsGizmos>();
     config.enabled = !config.enabled;
-    let debug_on = config.enabled;
-
-    wireframe_config.global = debug_on;
-
-    if debug_on {
-        if fps_query.is_empty() {
-            commands.spawn((
-                Text::new("FPS: --"),
-                TextFont {
-                    font_size: 18.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 1.0, 0.0)),
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(5.0),
-                    left: Val::Px(5.0),
-                    ..default()
-                },
-                FpsText,
-            ));
-        }
-    } else {
-        for entity in &fps_query {
-            commands.entity(entity).despawn();
-        }
-    }
+    wireframe_config.global = config.enabled;
 }
 
 /// Update FPS text each frame when visible.

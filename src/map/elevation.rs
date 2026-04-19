@@ -55,7 +55,7 @@ pub struct ElevationRenderCam {
 
 #[derive(Resource, Default)]
 pub struct ElevationMaterials {
-    pub by_level: std::collections::HashMap<u8, Handle<StandardMaterial>>,
+    pub by_level: std::collections::HashMap<u8, Handle<crate::particles::gpu_lights::ParticleLitMaterial>>,
 }
 
 /// Stores the computed Z height for each elevation level's floor.
@@ -115,7 +115,8 @@ pub fn setup_elevation_meshes(
     config: Res<ElevationConfig>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<crate::particles::gpu_lights::ParticleLitMaterial>>,
+    particle_buf: Res<crate::particles::gpu_lights::ParticleLightBuffer>,
     mut elev_materials: ResMut<ElevationMaterials>,
     mut elev_heights: ResMut<ElevationHeights>,
     slope_maps: Res<super::slope::SlopeHeightMaps>,
@@ -243,16 +244,21 @@ pub fn setup_elevation_meshes(
                 .sum::<f32>() - 1.0
         };
         elev_heights.z_by_level.insert(level, z);
-        let mat = materials.add(StandardMaterial {
-            base_color_texture: Some(rt_handle),
-            unlit: false,
-            perceptual_roughness: 1.0,
-            metallic: 0.0,
-            reflectance: 0.0,
-            alpha_mode: AlphaMode::Mask(0.9),
-            double_sided: true,
-            cull_mode: None,
-            ..default()
+        let mat = materials.add(bevy::pbr::ExtendedMaterial {
+            base: StandardMaterial {
+                base_color_texture: Some(rt_handle),
+                unlit: false,
+                perceptual_roughness: 1.0,
+                metallic: 0.0,
+                reflectance: 0.0,
+                alpha_mode: AlphaMode::Mask(0.9),
+                double_sided: true,
+                cull_mode: None,
+                ..default()
+            },
+            extension: crate::particles::gpu_lights::ParticleLightExt {
+                particle_data: particle_buf.handle.clone(),
+            },
         });
 
         elev_materials.by_level.insert(level, mat.clone());

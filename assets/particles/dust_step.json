@@ -1,0 +1,16 @@
+{
+  "id": "dust_step",
+  "lifetime": [0.3, 0.8],
+  "speed_range": [8.0, 15.0],
+  "direction": "Sphere",
+  "gravity": 20.0,
+  "drag": 0.5,
+  "color_start": [0.6, 0.5, 0.4, 0.6],
+  "color_end": [0.5, 0.4, 0.3, 0.0],
+  "size_start": 2.0,
+  "size_end": 4.0,
+  "blend_mode": "Alpha",
+  "emission_shape": {
+    "Ring": { "radius": 5.0, "width": 3.0 }
+  }
+}

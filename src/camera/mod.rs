@@ -1,15 +1,11 @@
-pub mod billboard_material;
 pub mod combat;
 pub mod cutscene;
 pub mod follow;
-pub mod shadow_mesh;
 
 use bevy::audio::SpatialListener;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
-use bevy::camera::visibility::RenderLayers;
-
-use bevy::light::ShadowFilteringMethod;
+use bevy::light::{ShadowFilteringMethod, VolumetricFog};
 use crate::app_state::GameState;
 use crate::sound::spatial::GameListener;
 
@@ -23,7 +19,6 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<combat::CombatCamera>()
             .init_resource::<combat::BillboardTilesReady>()
-            .add_plugins(MaterialPlugin::<billboard_material::BillboardMaterial>::default())
             .add_systems(Startup, spawn_camera)
             .add_systems(
                 Update,
@@ -35,11 +30,6 @@ impl Plugin for CameraPlugin {
                     combat::combat_grid_fade,
                     combat::spawn_object_lights
                         .after(combat::setup_billboard_tiles),
-                    shadow_mesh::spawn_shadow_meshes
-                        .after(combat::setup_billboard_tiles)
-                        .after(combat::billboard_system),
-                    shadow_mesh::propagate_shadow_mesh_layers
-                        .after(shadow_mesh::spawn_shadow_meshes),
                     #[cfg(feature = "dev_tools")]
                     crate::billboard::object_editor::update_object_light_positions
                         .after(combat::billboard_system),
@@ -76,6 +66,12 @@ fn spawn_camera(mut commands: Commands) {
         ShadowFilteringMethod::Gaussian,
         Msaa::Off,
         Smaa { preset: SmaaPreset::Low },
-        RenderLayers::layer(0),
+        // Volumetric fog for god rays from the sun.
+        VolumetricFog {
+            ambient_color: Color::WHITE,
+            ambient_intensity: 0.0,
+            step_count: 32,
+            ..default()
+        },
     ));
 }

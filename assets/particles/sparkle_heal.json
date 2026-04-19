@@ -1,0 +1,49 @@
+{
+  "id": "sparkle_heal",
+  "lifetime": [
+    0.8,
+    5.9
+  ],
+  "speed_range": [
+    5.0,
+    20.0
+  ],
+  "direction": "Sphere",
+  "gravity": 5.0,
+  "drag": 0.1,
+  "color_start": [
+    0.3,
+    1.0,
+    0.5,
+    1.0
+  ],
+  "color_end": [
+    0.1,
+    0.8,
+    0.3,
+    0.0
+  ],
+  "size_start": 3.0,
+  "size_end": 1.0,
+  "texture": null,
+  "blend_mode": "Additive",
+  "emission_shape": {
+    "Sphere": {
+      "radius": 200.0
+    }
+  },
+  "rotation_range": [
+    0.0,
+    6.28
+  ],
+  "angular_velocity": null,
+  "light": {
+    "color": [
+      1.0,
+      0.8499999,
+      0.6
+    ],
+    "intensity": 0.3,
+    "radius": 20.0
+  }
+}

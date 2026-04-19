@@ -1,0 +1,45 @@
+{
+  "id": "fire_small",
+  "lifetime": [
+    0.5,
+    1.2
+  ],
+  "speed_range": [
+    15.0,
+    40.0
+  ],
+  "direction": "Up",
+  "gravity": 0.0,
+  "drag": 0.2,
+  "color_start": [
+    1.0,
+    0.6,
+    0.1,
+    1.0
+  ],
+  "color_end": [
+    1.0,
+    0.2,
+    0.0,
+    0.0
+  ],
+  "size_start": 5.0,
+  "size_end": 2.0,
+  "texture": null,
+  "blend_mode": "Additive",
+  "emission_shape": "Point",
+  "rotation_range": null,
+  "angular_velocity": [
+    -1.0,
+    1.0
+  ],
+  "light": {
+    "color": [
+      1.0,
+      0.60000014,
+      0.19999999
+    ],
+    "intensity": 2.5,
+    "radius": 5.0
+  }
+}

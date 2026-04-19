@@ -31,8 +31,6 @@ impl Plugin for LightingPlugin {
                     animation::animate_lights,
                     components::sync_light_components
                         .after(animation::animate_lights),
-                    components::manage_shadow_budget
-                        .after(components::sync_light_components),
                     emissive::sync_emissive_links,
                     tiled_spawn::spawn_lights_from_tiled,
                     tile_light::spawn_lights_from_tile_properties,

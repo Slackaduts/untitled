@@ -16,11 +16,16 @@ pub fn sync_emissive_links(
 ) {
     for (link, emitter) in &emitters {
         if let Ok(mut light) = lights.get_mut(link.light_entity) {
-            light.intensity = if emitter.active {
-                link.intensity_scale
+            if !emitter.active || emitter.active_count == 0 {
+                light.intensity = 0.0;
             } else {
-                0.0
-            };
+                // Modulate intensity by particle count ratio for natural
+                // glow behavior (starting fire = dim, full blaze = bright).
+                let count_factor = (emitter.active_count as f32
+                    / emitter.max_particles.max(1) as f32)
+                    .clamp(0.0, 1.0);
+                light.base_intensity = link.intensity_scale * count_factor;
+            }
         }
     }
 }

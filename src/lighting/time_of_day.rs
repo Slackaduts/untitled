@@ -2,6 +2,8 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::prelude::*;
 
+use bevy::light::{FogVolume, VolumetricLight};
+
 use super::components::SunLight;
 
 /// Tracks in-game time of day (0.0–24.0 hours).
@@ -31,8 +33,15 @@ pub fn advance_time_of_day(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
     tod.hour %= 24.0;
 }
 
+// Palette constants for day/night tinting.
+const NIGHT_COLOR: Color = Color::linear_rgb(0.08, 0.10, 0.25);
+const NIGHT_INTENSITY: f32 = 0.15;
+const DAWN_COLOR: Color = Color::linear_rgb(0.9, 0.55, 0.25);
+const DAY_COLOR: Color = Color::linear_rgb(1.0, 0.95, 0.80);
+const DAY_INTENSITY: f32 = 1.0;
+
 /// Maps hour-of-day to ambient color and intensity via piecewise-linear curves.
-/// Writes to Bevy's built-in GlobalAmbientLight resource.
+/// Night is blue moonlight (never black), daytime is warm yellow.
 pub fn compute_ambient_from_time(
     tod: Res<TimeOfDay>,
     mut ambient: ResMut<GlobalAmbientLight>,
@@ -40,51 +49,31 @@ pub fn compute_ambient_from_time(
     let h = tod.hour;
 
     let (color, intensity) = match h {
-        // Night: 21–5
+        // Night: 21–5 — dark blue moonlight, always visible
         h if h >= 21.0 || h < 5.0 => {
-            (Color::linear_rgb(0.05, 0.05, 0.15), 0.08)
+            (NIGHT_COLOR, NIGHT_INTENSITY)
         }
         // Pre-dawn: 5–6
         h if h < 6.0 => {
             let t = h - 5.0;
-            let c = lerp_color(
-                Color::linear_rgb(0.05, 0.05, 0.15),
-                Color::linear_rgb(0.8, 0.5, 0.2),
-                t,
-            );
-            (c, lerp(0.08, 0.3, t))
+            (lerp_color(NIGHT_COLOR, DAWN_COLOR, t), lerp(NIGHT_INTENSITY, 0.35, t))
         }
         // Dawn: 6–8
         h if h < 8.0 => {
             let t = (h - 6.0) / 2.0;
-            let c = lerp_color(
-                Color::linear_rgb(0.8, 0.5, 0.2),
-                Color::WHITE,
-                t,
-            );
-            (c, lerp(0.3, 1.0, t))
+            (lerp_color(DAWN_COLOR, DAY_COLOR, t), lerp(0.35, DAY_INTENSITY, t))
         }
-        // Day: 8–17
-        h if h < 17.0 => (Color::WHITE, 1.0),
+        // Day: 8–17 — warm yellow
+        h if h < 17.0 => (DAY_COLOR, DAY_INTENSITY),
         // Dusk: 17–19
         h if h < 19.0 => {
             let t = (h - 17.0) / 2.0;
-            let c = lerp_color(
-                Color::WHITE,
-                Color::linear_rgb(0.8, 0.5, 0.2),
-                t,
-            );
-            (c, lerp(1.0, 0.3, t))
+            (lerp_color(DAY_COLOR, DAWN_COLOR, t), lerp(DAY_INTENSITY, 0.35, t))
         }
         // Twilight: 19–21
         _ => {
             let t = (h - 19.0) / 2.0;
-            let c = lerp_color(
-                Color::linear_rgb(0.8, 0.5, 0.2),
-                Color::linear_rgb(0.05, 0.05, 0.15),
-                t,
-            );
-            (c, lerp(0.3, 0.08, t))
+            (lerp_color(DAWN_COLOR, NIGHT_COLOR, t), lerp(0.35, NIGHT_INTENSITY, t))
         }
     };
 
@@ -96,7 +85,6 @@ pub fn compute_ambient_from_time(
 /// Spawns the sun DirectionalLight entity at startup.
 pub fn spawn_sun_light(mut commands: Commands) {
     use bevy::light::cascade::CascadeShadowConfigBuilder;
-    use bevy::camera::visibility::RenderLayers;
 
     commands.spawn((
         SunLight,
@@ -104,8 +92,10 @@ pub fn spawn_sun_light(mut commands: Commands) {
             color: Color::WHITE,
             illuminance: 8_000.0,
             shadows_enabled: true,
-            shadow_depth_bias: 0.5,
-            shadow_normal_bias: 4.0,
+            // Higher biases push shadow edges outward, softening them and
+            // hiding hard stair-step artifacts from the shadow map.
+            shadow_depth_bias: 1.0,
+            shadow_normal_bias: 6.0,
             ..default()
         },
         Transform::from_rotation(
@@ -119,12 +109,24 @@ pub fn spawn_sun_light(mut commands: Commands) {
             overlap_proportion: 0.3,
         }
         .build(),
-        RenderLayers::from_layers(&[0, crate::camera::shadow_mesh::SHADOW_CASTER_LAYER]),
+        // Enable volumetric light (god rays) from the sun.
+        VolumetricLight,
     ));
-    commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 2048 });
-    // 256px per cube face × 6 faces = ~1.5MB per shadow-casting point light,
-    // and 4x lower fill cost vs 512px. Still readable at typical camera distance.
-    commands.insert_resource(bevy::light::PointLightShadowMap { size: 256 });
+    // Lower shadow map resolution → larger texels → naturally softer shadow
+    // edges. 1024 with Gaussian PCF gives a gentle, diffuse look.
+    commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
+
+    // Global fog volume for god rays — covers the entire visible area.
+    commands.spawn(FogVolume {
+        density_factor: 0.01,
+        absorption: 0.0,
+        scattering: 0.15,
+        scattering_asymmetry: 0.85,
+        fog_color: Color::WHITE,
+        light_tint: Color::linear_rgb(1.0, 0.95, 0.80),
+        light_intensity: 0.6,
+        ..default()
+    });
 }
 
 /// Rotates the sun DirectionalLight based on TimeOfDay.
@@ -140,17 +142,27 @@ pub fn update_sun_light(
     let is_day = h >= 6.0 && h <= 18.0;
 
     if !is_day {
-        sun_light.illuminance = 0.0;
+        // Faint blue-white moonlight so nighttime is never pitch black.
+        sun_light.illuminance = 400.0;
+        sun_light.color = Color::linear_rgb(0.6, 0.7, 1.0);
         return;
     }
 
     let t = (h - 6.0) / 12.0; // 0 at sunrise, 1 at sunset
     let elevation = (t * PI).sin(); // peaks at noon
-    let azimuth = t * PI;
 
-    // Elevation angle: keep the sun steep (40°–80°) so shadow displacement stays small.
-    let min_elev = 40.0_f32.to_radians();
-    let max_elev = 80.0_f32.to_radians();
+    // Azimuth: sweep 60°–120° so the sun always faces into the billboard
+    // plane (billboards lie in XY, face +Z toward camera). The narrow range
+    // keeps shadows consistently thick — the player can't see the sun, so
+    // visual shadow quality matters more than a wide sweep.
+    let az_min = 60.0_f32.to_radians();
+    let az_max = 120.0_f32.to_radians();
+    let azimuth = az_min + t * (az_max - az_min);
+
+    // Elevation angle: 45°–58° keeps the sun steep enough for short,
+    // compact shadows, but never so overhead that billboard shadows go thin.
+    let min_elev = 45.0_f32.to_radians();
+    let max_elev = 58.0_f32.to_radians();
     let elevation_angle = min_elev + elevation * (max_elev - min_elev);
 
     // Rotate directional light: it shines along its -Z in local space
@@ -163,16 +175,15 @@ pub fn update_sun_light(
     );
 
     // Illuminance: bright at noon, dim at dawn/dusk
-    // Fade smoothly at horizon
     let dawn_dusk_fade = (elevation * 4.0).clamp(0.0, 1.0);
     sun_light.illuminance = elevation * 8_000.0 * dawn_dusk_fade;
 
-    // Color shift: warm at dawn/dusk, white at noon
-    let warmth = 1.0 - elevation; // 0 at noon, 1 at horizon
+    // Color: warm golden at dawn/dusk, soft warm yellow at noon.
+    let warmth = 1.0 - elevation; // 1 at horizon, 0 at noon
     sun_light.color = Color::linear_rgb(
         1.0,
-        1.0 - warmth * 0.3,
-        1.0 - warmth * 0.5,
+        lerp(0.92, 0.65, warmth),  // noon: slightly warm, horizon: golden
+        lerp(0.75, 0.25, warmth),   // noon: warm yellow, horizon: deep amber
     );
 }
 

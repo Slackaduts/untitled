@@ -121,57 +121,11 @@ impl Default for LightSource {
     }
 }
 
-/// Max number of point/spot lights that cast shadows simultaneously.
-/// Each shadow-casting point light renders a 6-face cube map per frame.
-/// Lights parented to billboards are offset forward of the depth-displaced
-/// extrusion so they don't self-occlude.
-pub const SHADOW_BUDGET: usize = 2;
-
 /// Intensity scaling factor: LightSource intensity (0-5 range) → lumens for Bevy lights.
 /// Bevy PBR uses physical units (lumens) with inverse-square falloff. Our world units
 /// are pixels (~48px per tile), so lights at range 100+ need enormous lumen values
 /// to produce visible illumination at that "distance."
 const INTENSITY_SCALE: f32 = 100_000_000.0;
-
-/// Enables shadows on the closest N lights to the camera, disables on the rest.
-/// Keeps total shadow map cost bounded regardless of light count.
-pub fn manage_shadow_budget(
-    camera: Query<&GlobalTransform, With<Camera3d>>,
-    mut point_lights: Query<(Entity, &GlobalTransform, &mut PointLight)>,
-    mut spot_lights: Query<(Entity, &GlobalTransform, &mut SpotLight)>,
-) {
-    let Ok(cam_gt) = camera.iter().next().ok_or(()) else { return };
-    let cam_pos = cam_gt.translation();
-
-    // Collect all lights with distances
-    let mut light_dists: Vec<(f32, Entity, bool)> = Vec::new(); // (dist, entity, is_point)
-    for (entity, gt, _) in &point_lights {
-        let dist = gt.translation().distance(cam_pos);
-        light_dists.push((dist, entity, true));
-    }
-    for (entity, gt, _) in &spot_lights {
-        let dist = gt.translation().distance(cam_pos);
-        light_dists.push((dist, entity, false));
-    }
-
-    light_dists.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Enable shadows on closest N, disable on the rest. Only write when
-    // the value actually changes so unchanged lights don't get re-extracted
-    // to the render world every frame.
-    for (i, &(_, entity, is_point)) in light_dists.iter().enumerate() {
-        let enable = i < SHADOW_BUDGET;
-        if is_point {
-            if let Ok((_, _, mut pl)) = point_lights.get_mut(entity) {
-                if pl.shadows_enabled != enable { pl.shadows_enabled = enable; }
-            }
-        } else {
-            if let Ok((_, _, mut sl)) = spot_lights.get_mut(entity) {
-                if sl.shadows_enabled != enable { sl.shadows_enabled = enable; }
-            }
-        }
-    }
-}
 
 /// Syncs LightSource data to Bevy PointLight/SpotLight components every frame.
 /// Runs after animation so animated intensity values are propagated.
@@ -212,24 +166,28 @@ pub fn sync_light_components(
     for (entity, ls) in &new_lights {
         match ls.shape {
             LightShape::Point | LightShape::Line { .. } | LightShape::Capsule { .. } => {
-                commands.entity(entity).try_insert(PointLight {
-                    color: ls.color,
-                    intensity: ls.intensity * INTENSITY_SCALE,
-                    range: ls.outer_radius,
-                    shadows_enabled: false,
-                    ..default()
-                });
+                commands.entity(entity).try_insert(
+                    PointLight {
+                        color: ls.color,
+                        intensity: ls.intensity * INTENSITY_SCALE,
+                        range: ls.outer_radius,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                );
             }
             LightShape::Cone { direction, angle } => {
-                commands.entity(entity).try_insert(SpotLight {
-                    color: ls.color,
-                    intensity: ls.intensity * INTENSITY_SCALE,
-                    range: ls.outer_radius,
-                    outer_angle: (angle * 0.5).min(FRAC_PI_2 - 0.01),
-                    inner_angle: angle * 0.15,
-                    shadows_enabled: false,
-                    ..default()
-                });
+                commands.entity(entity).try_insert(
+                    SpotLight {
+                        color: ls.color,
+                        intensity: ls.intensity * INTENSITY_SCALE,
+                        range: ls.outer_radius,
+                        outer_angle: (angle * 0.5).min(FRAC_PI_2 - 0.01),
+                        inner_angle: angle * 0.15,
+                        shadows_enabled: false,
+                        ..default()
+                    },
+                );
             }
         }
     }

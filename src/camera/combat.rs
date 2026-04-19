@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
+use bevy::light::NotShadowReceiver;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_resource::{
     Extent3d, TextureDimension, TextureFormat,
@@ -93,7 +94,8 @@ pub fn setup_billboard_tiles(
     asset_server: Res<AssetServer>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut bb_materials: ResMut<Assets<super::billboard_material::BillboardMaterial>>,
+    mut bb_materials: ResMut<Assets<crate::particles::gpu_lights::ParticleLitMaterial>>,
+    particle_buf: Res<crate::particles::gpu_lights::ParticleLightBuffer>,
     billboard_defs: Res<crate::billboard::properties::BillboardPropertyDefs>,
     tilemap_layers: Query<
         (Entity, &Name, &TileStorage, &TilemapSize, &TilemapTileSize,
@@ -593,75 +595,22 @@ pub fn setup_billboard_tiles(
 
                     let comp_tex_handle = images.add(comp_image);
 
-                    // Load depth profile for shadow displacement (if available).
-                    let ts_name_depth = sprite_key.rsplit_once('_')
-                        .map(|(name, _)| name)
-                        .unwrap_or(&sprite_key);
-                    let depth_path_str = format!(
-                        "objects/{ts_name_depth}/{}/depth.png", sprite_key
-                    );
-                    let depth_exists = std::path::Path::new(
-                        &format!("assets/{depth_path_str}")
-                    ).exists();
-
-                    let depth_handle = if depth_exists {
-                        asset_server.load(&depth_path_str)
-                    } else {
-                        // Fallback: 1x1 black texture (zero depth everywhere).
-                        create_flat_texture(&mut images, 1, 1, [0, 0, 0, 255])
-                    };
-
-                    let max_depth = if depth_exists {
-                        let md_path = format!(
-                            "assets/objects/{ts_name_depth}/{}/max_depth.txt", sprite_key
-                        );
-                        std::fs::read_to_string(&md_path)
-                            .ok()
-                            .and_then(|s| s.trim().parse::<f32>().ok())
-                            .unwrap_or(0.0)
-                            // Scale from mesh units to world units at a quarter
-                            // of the billboard height. Half was too aggressive —
-                            // at low sun elevations the vertical extrusion cast
-                            // shadows stretching several tiles horizontally.
-                            * (quad_h / 4.0)
-                    } else {
-                        quad_h * 0.125
-                    };
-
-                    let mat = bb_materials.add(
-                        super::billboard_material::BillboardMaterial {
-                            base: StandardMaterial {
-                                base_color_texture: Some(comp_tex_handle.clone()),
-                                alpha_mode: AlphaMode::Mask(0.5),
-                                unlit: false,
-                                // Fully matte diffuse: no specular highlights
-                                // that would desaturate pixel-art colors.
-                                perceptual_roughness: 1.0,
-                                metallic: 0.0,
-                                reflectance: 0.0,
-                                double_sided: true,
-                                cull_mode: None,
-                                ..default()
-                            },
-                            extension: super::billboard_material::BillboardDepthExtension {
-                                depth_params: super::billboard_material::BillboardDepthParams {
-                                    max_depth,
-                                    // Shadow-only cutoff. Main pass uses
-                                    // StandardMaterial's AlphaMode::Mask(0.5).
-                                    // Higher threshold here keeps only the
-                                    // high-alpha core of tessellation-edge
-                                    // triangles, killing tapered "spider-leg"
-                                    // shadows that form where opaque vertices
-                                    // neighbor transparent ones.
-                                    alpha_cutoff: 0.85,
-                                    has_depth_map: if depth_exists { 1 } else { 0 },
-                                    _pad: 0.0,
-                                },
-                                base_color_texture: comp_tex_handle.clone(),
-                                depth_texture: depth_handle,
-                            },
+                    let mat = bb_materials.add(bevy::pbr::ExtendedMaterial {
+                        base: StandardMaterial {
+                            base_color_texture: Some(comp_tex_handle.clone()),
+                            alpha_mode: AlphaMode::Mask(0.5),
+                            unlit: false,
+                            perceptual_roughness: 1.0,
+                            metallic: 0.0,
+                            reflectance: 0.0,
+                            double_sided: true,
+                            cull_mode: None,
+                            ..default()
                         },
-                    );
+                        extension: crate::particles::gpu_lights::ParticleLightExt {
+                            particle_data: particle_buf.handle.clone(),
+                        },
+                    });
 
                     let bb_level = tile_elev.map_or(0, |e| e.level);
                     let layer_z_offset = non_terrain_layer_idx as f32 * 0.5;
@@ -676,6 +625,10 @@ pub fn setup_billboard_tiles(
                         BillboardElevation { level: bb_level },
                         BillboardLayerOffset(layer_z_offset),
                         BillboardSpriteKey(sprite_key.clone()),
+                        // Billboard's own shader handles self-shadowing via
+                        // depth-map tracing; receiving Bevy cast-shadows would
+                        // darken the sprite under its own shadow mesh.
+                        NotShadowReceiver,
                     ));
 
                     // Attach billboard properties component if customized
@@ -935,44 +888,20 @@ fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
     let bottom = -offset_y;
     let top = h - offset_y;
 
-    // 16x16 cells = 17x17 = 289 vertices. Coarser tessellations produce
-    // visible polygons in the shadow silhouette and "spider-leg" artifacts
-    // where triangles span from opaque (high depth) to transparent (zero
-    // depth) vertices and the interpolated alpha stays above cutoff along
-    // a tapered strip. Higher tessellation shrinks those strips below a
-    // shadow-map texel.
-    const RES: u32 = 16;
-    let verts_per_side = RES + 1;
-    let total_verts = (verts_per_side * verts_per_side) as usize;
-
-    let mut vertices: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(total_verts);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(total_verts);
-
-    for j in 0..verts_per_side {
-        for i in 0..verts_per_side {
-            let fx = i as f32 / RES as f32;
-            let fy = j as f32 / RES as f32;
-            let x = left + fx * (right - left);
-            let y = bottom + fy * (top - bottom);
-            vertices.push([x, y, 0.0]);
-            normals.push([0.0, 0.0, 1.0]);
-            // v=1 at bottom, v=0 at top to match original sprite UV orientation
-            uvs.push([fx, 1.0 - fy]);
-        }
-    }
-
-    let mut indices: Vec<u32> = Vec::with_capacity((RES * RES * 6) as usize);
-    for j in 0..RES {
-        for i in 0..RES {
-            let row_stride = verts_per_side;
-            let i0 = j * row_stride + i;
-            let i1 = j * row_stride + i + 1;
-            let i2 = (j + 1) * row_stride + i + 1;
-            let i3 = (j + 1) * row_stride + i;
-            indices.extend_from_slice(&[i0, i1, i2, i0, i2, i3]);
-        }
-    }
+    let vertices = vec![
+        [left, bottom, 0.0],
+        [right, bottom, 0.0],
+        [right, top, 0.0],
+        [left, top, 0.0],
+    ];
+    let normals = vec![[0.0, 0.0, 1.0]; 4];
+    let uvs = vec![
+        [0.0, 1.0],
+        [1.0, 1.0],
+        [1.0, 0.0],
+        [0.0, 0.0],
+    ];
+    let indices = vec![0u32, 1, 2, 0, 2, 3];
 
     Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)

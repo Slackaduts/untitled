@@ -29,6 +29,8 @@ pub struct ObjectProperties {
     #[serde(default)]
     pub lights: Vec<ObjectLight>,
     #[serde(default)]
+    pub emitters: Vec<ObjectEmitter>,
+    #[serde(default)]
     pub blend_height: f32,
     /// Shadow mesh offset from billboard base, as fraction of sprite dimensions (0-1).
     #[serde(default = "default_half")]
@@ -39,6 +41,52 @@ pub struct ObjectProperties {
     pub keywords: Vec<String>,
     #[serde(default = "default_type")]
     pub obj_type: String,
+}
+
+fn default_rate() -> f32 {
+    10.0
+}
+fn default_true() -> bool {
+    true
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ObjectEmitter {
+    /// X position on billboard as fraction (0=left, 1=right).
+    #[serde(default = "default_half")]
+    pub offset_x: f32,
+    /// Y position on billboard as fraction (0=top, 1=bottom).
+    #[serde(default = "default_half")]
+    pub offset_y: f32,
+    /// Particle definition ID (references ParticleRegistry).
+    #[serde(default)]
+    pub definition_id: String,
+    /// Particles per second.
+    #[serde(default = "default_rate")]
+    pub rate: f32,
+    /// Whether the emitter is active by default.
+    #[serde(default = "default_true")]
+    pub active: bool,
+}
+
+impl Default for ObjectEmitter {
+    fn default() -> Self {
+        Self {
+            offset_x: default_half(),
+            offset_y: default_half(),
+            definition_id: String::new(),
+            rate: default_rate(),
+            active: true,
+        }
+    }
+}
+
+/// Marker for emitters spawned from object properties, stores billboard-local offset.
+#[derive(Component)]
+pub struct ObjectSpriteEmitter {
+    pub sprite_key: String,
+    pub offset_x: f32,
+    pub offset_y: f32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -646,6 +694,45 @@ pub fn object_editor_ui(
                     }
                 }
 
+                // Draw each emitter's position on the preview (cyan dots).
+                for (ei, emitter) in obj.properties.emitters.iter().enumerate() {
+                    let emitter_pos = egui::pos2(
+                        rect.min.x + emitter.offset_x * preview_w,
+                        rect.min.y + emitter.offset_y * preview_h,
+                    );
+
+                    let emitter_color = egui::Color32::from_rgb(60, 200, 220);
+
+                    let is_hovered = hover_pos.is_some_and(|hp| {
+                        let dx = hp.x - emitter_pos.x;
+                        let dy = hp.y - emitter_pos.y;
+                        (dx * dx + dy * dy).sqrt() < 12.0
+                    });
+
+                    let dot_radius = if is_hovered { 6.0 } else { 4.0 };
+                    ui.painter().circle_filled(emitter_pos, dot_radius, emitter_color);
+                    let outline = if is_hovered {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::BLACK
+                    };
+                    ui.painter().circle_stroke(
+                        emitter_pos,
+                        dot_radius,
+                        egui::Stroke::new(1.5, outline),
+                    );
+
+                    if is_hovered {
+                        ui.painter().text(
+                            egui::pos2(emitter_pos.x, emitter_pos.y - dot_radius - 4.0),
+                            egui::Align2::CENTER_BOTTOM,
+                            format!("Emitter {ei}"),
+                            egui::FontId::proportional(11.0),
+                            egui::Color32::WHITE,
+                        );
+                    }
+                }
+
                 ui.add_space(4.0);
             }
 
@@ -770,6 +857,95 @@ pub fn object_editor_ui(
 
             if ui.button("+ Add Light").clicked() {
                 obj.properties.lights.push(ObjectLight::default());
+                state.dirty = true;
+            }
+
+            ui.separator();
+
+            // ── Particle Emitters ─────────────────────────────────
+            ui.heading("Particle Emitters");
+
+            let mut remove_emitter_idx: Option<usize> = None;
+            let num_emitters = obj.properties.emitters.len();
+            for ei in 0..num_emitters {
+                let emitter = &mut obj.properties.emitters[ei];
+                ui.push_id(format!("emitter_{ei}"), |ui| {
+                    ui.group(|ui| {
+                        // Definition ID + rate
+                        ui.horizontal(|ui| {
+                            ui.label("Def:");
+                            let mut id = emitter.definition_id.clone();
+                            if ui
+                                .add(egui::TextEdit::singleline(&mut id).desired_width(100.0))
+                                .changed()
+                            {
+                                emitter.definition_id = id;
+                                state.dirty = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut emitter.rate)
+                                        .range(0.1..=100.0)
+                                        .speed(0.5)
+                                        .prefix("Rate: "),
+                                )
+                                .changed()
+                            {
+                                state.dirty = true;
+                            }
+                        });
+
+                        // Offset
+                        ui.horizontal(|ui| {
+                            ui.label("Offset:");
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut emitter.offset_x)
+                                        .range(0.0..=1.0)
+                                        .speed(0.01)
+                                        .prefix("X: "),
+                                )
+                                .changed()
+                            {
+                                state.dirty = true;
+                            }
+                            if ui
+                                .add(
+                                    egui::DragValue::new(&mut emitter.offset_y)
+                                        .range(0.0..=1.0)
+                                        .speed(0.01)
+                                        .prefix("Y: "),
+                                )
+                                .changed()
+                            {
+                                state.dirty = true;
+                            }
+                        });
+
+                        // Active + remove
+                        ui.horizontal(|ui| {
+                            if ui.checkbox(&mut emitter.active, "Active").changed() {
+                                state.dirty = true;
+                            }
+                            if ui
+                                .small_button("x")
+                                .on_hover_text("Remove emitter")
+                                .clicked()
+                            {
+                                remove_emitter_idx = Some(ei);
+                            }
+                        });
+                    });
+                });
+            }
+
+            if let Some(ri) = remove_emitter_idx {
+                obj.properties.emitters.remove(ri);
+                state.dirty = true;
+            }
+
+            if ui.button("+ Add Emitter").clicked() {
+                obj.properties.emitters.push(ObjectEmitter::default());
                 state.dirty = true;
             }
 
@@ -979,14 +1155,21 @@ fn light_world_pos(bb_pos: Vec3, bb_rot: Quat, bb_h: f32, offset_x: f32, offset_
     bb_pos + bb_rot * local
 }
 
-/// Repositions object lights each frame so they follow billboard tilt.
+/// Repositions object lights and emitters each frame so they follow billboard tilt.
 /// Runs after billboard_system to use the current frame's rotation.
 pub fn update_object_light_positions(
     billboards: Query<
         (&crate::camera::combat::BillboardSpriteKey, &Transform, &crate::camera::combat::BillboardHeight),
         With<crate::camera::combat::Billboard>,
     >,
-    mut lights: Query<(&ObjectSpriteLight, &mut Transform), Without<crate::camera::combat::Billboard>>,
+    mut lights: Query<
+        (&ObjectSpriteLight, &mut Transform),
+        (Without<crate::camera::combat::Billboard>, Without<ObjectSpriteEmitter>),
+    >,
+    mut emitters: Query<
+        (&ObjectSpriteEmitter, &mut Transform),
+        (Without<crate::camera::combat::Billboard>, Without<ObjectSpriteLight>),
+    >,
 ) {
     let mut bb_map: std::collections::HashMap<&str, Vec<(Vec3, Quat, f32)>> =
         std::collections::HashMap::new();
@@ -996,24 +1179,39 @@ pub fn update_object_light_positions(
             .push((tf.translation, tf.rotation, bb_h.height));
     }
 
+    // Reposition lights.
     for (osl, mut tf) in &mut lights {
-        let Some(bbs) = bb_map.get(osl.sprite_key.as_str()) else {
-            continue;
-        };
-        let &(bb_pos, bb_rot, bb_h) = if bbs.len() == 1 {
-            &bbs[0]
-        } else {
-            bbs.iter()
-                .min_by(|a, b| {
-                    let da = a.0.distance_squared(tf.translation);
-                    let db = b.0.distance_squared(tf.translation);
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .unwrap()
-        };
-
-        tf.translation = light_world_pos(bb_pos, bb_rot, bb_h, osl.offset_x, osl.offset_y);
+        if let Some(bb_pos) = find_nearest_billboard(&bb_map, &osl.sprite_key, tf.translation) {
+            tf.translation = light_world_pos(bb_pos.0, bb_pos.1, bb_pos.2, osl.offset_x, osl.offset_y);
+        }
     }
+
+    // Reposition emitters.
+    for (ose, mut tf) in &mut emitters {
+        if let Some(bb_pos) = find_nearest_billboard(&bb_map, &ose.sprite_key, tf.translation) {
+            tf.translation = light_world_pos(bb_pos.0, bb_pos.1, bb_pos.2, ose.offset_x, ose.offset_y);
+        }
+    }
+}
+
+fn find_nearest_billboard<'a>(
+    bb_map: &'a std::collections::HashMap<&str, Vec<(Vec3, Quat, f32)>>,
+    key: &str,
+    current_pos: Vec3,
+) -> Option<(Vec3, Quat, f32)> {
+    let bbs = bb_map.get(key)?;
+    let &(pos, rot, h) = if bbs.len() == 1 {
+        &bbs[0]
+    } else {
+        bbs.iter()
+            .min_by(|a, b| {
+                let da = a.0.distance_squared(current_pos);
+                let db = b.0.distance_squared(current_pos);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap()
+    };
+    Some((pos, rot, h))
 }
 
 /// Draws wireframe gizmo spheres for each light belonging to the selected tile object.
