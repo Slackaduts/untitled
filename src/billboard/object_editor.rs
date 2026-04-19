@@ -3,128 +3,11 @@ use std::path::PathBuf;
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
-// ── Data structures ───────────────────────────────────────────────────────
-
-fn default_half() -> f32 {
-    0.5
-}
-fn default_color() -> [f32; 3] {
-    [1.0, 0.85, 0.6]
-}
-fn default_intensity() -> f32 {
-    1.5
-}
-fn default_radius() -> f32 {
-    100.0
-}
-fn default_type() -> String {
-    "organic".to_string()
-}
-fn default_shape() -> String {
-    "point".to_string()
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
-pub struct ObjectProperties {
-    #[serde(default)]
-    pub lights: Vec<ObjectLight>,
-    #[serde(default)]
-    pub emitters: Vec<ObjectEmitter>,
-    #[serde(default)]
-    pub blend_height: f32,
-    /// Shadow mesh offset from billboard base, as fraction of sprite dimensions (0-1).
-    #[serde(default = "default_half")]
-    pub shadow_offset_x: f32,
-    #[serde(default = "default_half")]
-    pub shadow_offset_y: f32,
-    #[serde(default)]
-    pub keywords: Vec<String>,
-    #[serde(default = "default_type")]
-    pub obj_type: String,
-}
-
-fn default_rate() -> f32 {
-    10.0
-}
-fn default_true() -> bool {
-    true
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct ObjectEmitter {
-    /// X position on billboard as fraction (0=left, 1=right).
-    #[serde(default = "default_half")]
-    pub offset_x: f32,
-    /// Y position on billboard as fraction (0=top, 1=bottom).
-    #[serde(default = "default_half")]
-    pub offset_y: f32,
-    /// Particle definition ID (references ParticleRegistry).
-    #[serde(default)]
-    pub definition_id: String,
-    /// Particles per second.
-    #[serde(default = "default_rate")]
-    pub rate: f32,
-    /// Whether the emitter is active by default.
-    #[serde(default = "default_true")]
-    pub active: bool,
-}
-
-impl Default for ObjectEmitter {
-    fn default() -> Self {
-        Self {
-            offset_x: default_half(),
-            offset_y: default_half(),
-            definition_id: String::new(),
-            rate: default_rate(),
-            active: true,
-        }
-    }
-}
-
-/// Marker for emitters spawned from object properties, stores billboard-local offset.
-#[derive(Component)]
-pub struct ObjectSpriteEmitter {
-    pub sprite_key: String,
-    pub offset_x: f32,
-    pub offset_y: f32,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct ObjectLight {
-    /// X position on billboard as fraction (0=left, 1=right).
-    #[serde(default = "default_half")]
-    pub offset_x: f32,
-    /// Y position on billboard as fraction (0=top, 1=bottom).
-    #[serde(default = "default_half")]
-    pub offset_y: f32,
-    #[serde(default = "default_color")]
-    pub color: [f32; 3],
-    #[serde(default = "default_intensity")]
-    pub intensity: f32,
-    #[serde(default = "default_radius")]
-    pub radius: f32,
-    #[serde(default = "default_shape")]
-    pub shape: String,
-    #[serde(default)]
-    pub pulse: bool,
-    #[serde(default)]
-    pub flicker: bool,
-}
-
-impl Default for ObjectLight {
-    fn default() -> Self {
-        Self {
-            offset_x: default_half(),
-            offset_y: default_half(),
-            color: default_color(),
-            intensity: default_intensity(),
-            radius: default_radius(),
-            shape: default_shape(),
-            pulse: false,
-            flicker: false,
-        }
-    }
-}
+// Re-export shared types so existing `crate::billboard::object_editor::X` paths still work.
+pub use super::object_types::{
+    ObjectProperties, ObjectLight, ObjectEmitter,
+    ObjectSpriteLight, ObjectSpriteEmitter,
+};
 
 #[derive(Resource)]
 pub struct ObjectEditorState {
@@ -159,17 +42,6 @@ pub struct ObjectEntry {
     pub has_depth: bool,
     pub sprite_texture: Option<egui::TextureId>,
     pub sprite_handle: Option<Handle<Image>>,
-}
-
-/// Marker for ALL lights spawned from object properties (startup + editor preview).
-/// Stores billboard-local offset so the light follows the billboard's tilt.
-#[derive(Component)]
-pub struct ObjectSpriteLight {
-    pub sprite_key: String,
-    /// Horizontal offset on billboard face as fraction (0=left, 1=right).
-    pub offset_x: f32,
-    /// Vertical offset on billboard face as fraction (0=bottom, 1=top).
-    pub offset_y: f32,
 }
 
 /// Additional marker for lights managed by the live preview system.
@@ -289,7 +161,7 @@ impl PathReadHelpers for PathBuf {
             .ok()
             .map(|s| s.trim().to_lowercase())
             .filter(|s| s == "organic" || s == "structural")
-            .unwrap_or_else(default_type)
+            .unwrap_or_else(super::object_types::default_type)
     }
 
     fn pipe_read_f32(&self) -> f32 {

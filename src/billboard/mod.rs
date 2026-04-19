@@ -1,3 +1,4 @@
+pub mod object_types;
 pub mod properties;
 #[cfg(feature = "dev_tools")]
 pub mod object_editor;

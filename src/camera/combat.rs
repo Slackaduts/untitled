@@ -411,7 +411,7 @@ pub fn setup_billboard_tiles(
                         let sprite_key_for_blend = format!("{ts_name_for_props}_{:08x}", hasher.finish() as u32);
                         let props_path = format!("assets/objects/{ts_name_for_props}/{sprite_key_for_blend}/properties.json");
                         if let Ok(json_str) = std::fs::read_to_string(&props_path) {
-                            if let Ok(props) = serde_json::from_str::<crate::billboard::object_editor::ObjectProperties>(&json_str) {
+                            if let Ok(props) = serde_json::from_str::<crate::billboard::object_types::ObjectProperties>(&json_str) {
                                 if props.blend_height > 0.0 {
                                     blend_height = props.blend_height;
                                 }
@@ -706,7 +706,7 @@ pub fn spawn_object_lights(
         let sprite_dir = format!("assets/objects/{ts_name}/{}", key.0);
         let props_path = format!("{sprite_dir}/properties.json");
 
-        let obj_props: Option<crate::billboard::object_editor::ObjectProperties> =
+        let obj_props: Option<crate::billboard::object_types::ObjectProperties> =
             std::fs::read_to_string(&props_path)
                 .ok()
                 .and_then(|s| serde_json::from_str(&s).ok());
@@ -762,7 +762,7 @@ pub fn spawn_object_lights(
                     anim_seed: rand::random::<f32>() * 100.0,
                     ..default()
                 },
-                crate::billboard::object_editor::ObjectSpriteLight {
+                crate::billboard::object_types::ObjectSpriteLight {
                     sprite_key: key.0.clone(),
                     offset_x: light_def.offset_x,
                     offset_y: light_def.offset_y,
