@@ -6,8 +6,21 @@ use bevy::render::render_resource::WgpuFeatures;
 use bevy::render::settings::{RenderCreation, WgpuSettings};
 #[cfg(feature = "dev_tools")]
 use bevy::render::RenderPlugin;
-use bevy::window::PresentMode;
+use bevy::window::{PresentMode, WindowMode};
 use untitled::UntitledPlugin;
+
+fn toggle_fullscreen(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut windows: Query<&mut Window>,
+) {
+    if keyboard.just_pressed(KeyCode::F11) {
+        let mut window = windows.single_mut().unwrap();
+        window.mode = match window.mode {
+            WindowMode::Windowed => WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current),
+            _ => WindowMode::Windowed,
+        };
+    }
+}
 
 fn main() {
     let mut app = App::new();
@@ -45,5 +58,7 @@ fn main() {
     #[cfg(feature = "dev_tools")]
     app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default());
 
-    app.add_plugins(UntitledPlugin).run();
+    app.add_plugins(UntitledPlugin)
+        .add_systems(Update, toggle_fullscreen)
+        .run();
 }
