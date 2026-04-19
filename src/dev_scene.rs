@@ -23,6 +23,7 @@ impl Plugin for DevScenePlugin {
                 (
                     player_movement,
                     patch_map_colliders,
+                    center_player_on_map,
                     debug_colliders,
                     toggle_combat_camera,
                 )
@@ -116,6 +117,21 @@ fn player_movement(
 
     let dir = direction.normalize_or_zero() * PLAYER_SPEED;
     vel.0 = Vec3::new(dir.x, dir.y, 0.0);
+}
+
+/// Moves the player to the map center once map bounds are known. Runs once.
+fn center_player_on_map(
+    bounds: Res<crate::camera::follow::MapBounds>,
+    mut player: Query<&mut Transform, With<Player>>,
+    mut done: Local<bool>,
+) {
+    if *done || !bounds.valid { return; }
+    let center = (bounds.min + bounds.max) * 0.5;
+    if let Some(mut tf) = player.iter_mut().next() {
+        tf.translation.x = center.x;
+        tf.translation.y = center.y;
+        *done = true;
+    }
 }
 
 /// Patch colliders spawned by bevy_ecs_tiled that are missing a RigidBody.

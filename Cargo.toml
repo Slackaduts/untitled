@@ -28,6 +28,7 @@ untitled_macros = { path = "macros" }
 [features]
 default = ["dev_tools"]
 dev_tools = []
+tracy = ["bevy/trace_tracy"]
 
 # Fast dev builds: optimize deps (physics, math, rendering) but keep our code debuggable
 [profile.dev]

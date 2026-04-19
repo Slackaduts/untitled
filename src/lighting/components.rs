@@ -192,3 +192,23 @@ pub fn sync_light_components(
         }
     }
 }
+
+/// Margin beyond the visible rect where lights remain active.
+/// Lights can illuminate surfaces within their radius, so we need extra padding.
+const LIGHT_CULL_MARGIN: f32 = 200.0;
+
+/// Hides lights outside the camera's visible area to reduce cluster-building
+/// and per-fragment evaluation overhead.
+pub fn cull_lights(
+    rect: Res<crate::camera::visible_rect::CameraVisibleRect>,
+    mut lights: Query<(&Transform, &LightSource, &mut Visibility)>,
+) {
+    for (tf, ls, mut vis) in &mut lights {
+        let pos = Vec2::new(tf.translation.x, tf.translation.y);
+        let in_range = rect.overlaps_circle(pos, ls.outer_radius, LIGHT_CULL_MARGIN);
+        let target = if in_range { Visibility::Inherited } else { Visibility::Hidden };
+        if *vis != target {
+            *vis = target;
+        }
+    }
+}

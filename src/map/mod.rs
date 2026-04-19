@@ -21,6 +21,18 @@ use crate::camera::follow::MapBounds;
 use elevation::ElevationConfig;
 use terrain_material::TerrainMaterial;
 
+/// Condition: true when any TiledTilemap layers still need processing.
+/// Covers the full setup pipeline: terrain material → slopes → elevation → colliders.
+fn has_unprocessed_tilemap_layers(
+    unprocessed: Query<(), (With<TiledTilemap>, Without<terrain_material::TerrainTypeMapReady>)>,
+    needs_elevation: Query<(), (With<terrain_material::TerrainTypeMapReady>, With<TiledTilemap>,
+                                Without<elevation::ElevationMeshReady>, Without<elevation::SlopeLayer>)>,
+    needs_edge_colliders: Query<(), (With<terrain_material::TerrainTypeMapReady>, With<TiledTilemap>,
+                                     Without<terrain_edges::EdgeCollidersGenerated>)>,
+) -> bool {
+    !unprocessed.is_empty() || !needs_elevation.is_empty() || !needs_edge_colliders.is_empty()
+}
+
 /// Default tile size in pixels. Used as the physics length unit.
 /// The actual tile size is read from the map file at runtime for rendering.
 pub const DEFAULT_TILE_SIZE: f32 = 48.0;
@@ -47,6 +59,7 @@ impl Plugin for MapPlugin {
             .init_resource::<ElevationConfig>()
             .init_resource::<elevation::ElevationMaterials>()
             .init_resource::<elevation::ElevationHeights>()
+            .init_resource::<elevation::ElevationBounds>()
             .init_resource::<slope::SlopeHeightMaps>();
 
         app.add_systems(
@@ -54,14 +67,21 @@ impl Plugin for MapPlugin {
             (
                 collision::corner_slip_system
                     .run_if(in_state(GameState::Overworld).or(in_state(GameState::Combat))),
-                terrain_material::build_terrain_and_attach_material,
+                terrain_material::build_terrain_and_attach_material
+                    .run_if(has_unprocessed_tilemap_layers),
                 slope::compute_slope_height_maps
-                    .after(terrain_material::build_terrain_and_attach_material),
+                    .after(terrain_material::build_terrain_and_attach_material)
+                    .run_if(has_unprocessed_tilemap_layers),
                 elevation::setup_elevation_meshes
-                    .after(slope::compute_slope_height_maps),
+                    .after(slope::compute_slope_height_maps)
+                    .run_if(has_unprocessed_tilemap_layers),
                 slope::generate_mesh_slope_colliders
-                    .after(slope::compute_slope_height_maps),
-                terrain_edges::generate_edge_colliders,
+                    .after(slope::compute_slope_height_maps)
+                    .run_if(has_unprocessed_tilemap_layers),
+                terrain_edges::generate_edge_colliders
+                    .run_if(has_unprocessed_tilemap_layers),
+                elevation::cull_offscreen_elevation_cameras
+                    .after(elevation::setup_elevation_meshes),
                 update_map_bounds,
                 update_fps_display,
             ),

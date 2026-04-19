@@ -86,6 +86,21 @@ pub struct BillboardSpriteKey(pub String);
 #[derive(Component)]
 pub struct BillboardLayerOffset(pub f32);
 
+/// Cached billboard state to avoid recomputing slope Z and tilt every frame
+/// when neither the billboard's XY position nor the camera has moved.
+#[derive(Component, Default)]
+pub struct BillboardCache {
+    pub last_xy: Vec2,
+    pub cached_z: f32,
+    pub cached_rotation: Quat,
+}
+
+/// Resource tracking the main camera's last position for billboard cache invalidation.
+#[derive(Resource, Default)]
+pub struct BillboardCameraState {
+    pub last_cam_translation: Vec3,
+}
+
 // ── Map setup ──────────────────────────────────────────────────────────────
 
 pub fn setup_billboard_tiles(
@@ -625,6 +640,7 @@ pub fn setup_billboard_tiles(
                         BillboardElevation { level: bb_level },
                         BillboardLayerOffset(layer_z_offset),
                         BillboardSpriteKey(sprite_key.clone()),
+                        BillboardCache::default(),
                         // Billboard's own shader handles self-shadowing via
                         // depth-map tracing; receiving Bevy cast-shadows would
                         // darken the sprite under its own shadow mesh.
@@ -987,12 +1003,14 @@ pub fn billboard_system(
     camera_q: Query<(&Camera, &GlobalTransform), With<CombatCamera3d>>,
     mut billboards: Query<
         (&mut Transform, Option<&BillboardHeight>, Option<&BillboardElevation>,
-         Option<&BillboardLayerOffset>, Option<&BillboardProperties>),
+         Option<&BillboardLayerOffset>, Option<&BillboardProperties>,
+         Option<&mut BillboardCache>),
         (With<Billboard>, Without<CombatCamera3d>),
     >,
     windows: Query<&Window>,
     slope_maps: Res<crate::map::slope::SlopeHeightMaps>,
     elev_heights: Res<crate::map::elevation::ElevationHeights>,
+    mut cam_state: ResMut<BillboardCameraState>,
 ) {
     let Some((camera, cam_gt)) = camera_q.iter().next() else { return };
     let window_height = windows.iter().next()
@@ -1006,7 +1024,24 @@ pub fn billboard_system(
     let fade_start_y = window_height * 0.7;
     let fade_range = window_height * 0.6;
 
-    for (mut tf, _bh, elev, layer_offset, bb_props) in &mut billboards {
+    // Check if camera has moved since last frame
+    let cam_translation = cam_gt.translation();
+    let camera_moved = cam_translation != cam_state.last_cam_translation;
+    cam_state.last_cam_translation = cam_translation;
+
+    for (mut tf, _bh, elev, layer_offset, bb_props, cache) in &mut billboards {
+        let xy = Vec2::new(tf.translation.x, tf.translation.y);
+
+        // If neither the billboard nor the camera moved, use cached values
+        if let Some(ref cache) = cache {
+            let billboard_moved = xy != cache.last_xy;
+            if !billboard_moved && !camera_moved && cache.last_xy != Vec2::ZERO {
+                tf.translation.z = cache.cached_z;
+                tf.rotation = cache.cached_rotation;
+                continue;
+            }
+        }
+
         // ── Slope Z adjustment ──
         let level = elev.map_or(0, |e| e.level);
         let base_z = elev_heights.z_by_level.get(&level).copied().unwrap_or(-1.0);
@@ -1022,7 +1057,8 @@ pub fn billboard_system(
             16.0
         };
         let layer_z = layer_offset.map_or(0.0, |o| o.0);
-        tf.translation.z = ground_z + z_offset + layer_z;
+        let final_z = ground_z + z_offset + layer_z;
+        tf.translation.z = final_z;
 
         // ── Tilt ──
         // Priority: per-billboard override > height-based > global default
@@ -1051,7 +1087,15 @@ pub fn billboard_system(
             base_tilt + (min_tilt - base_tilt) * t
         };
 
-        tf.rotation = Quat::from_rotation_x(tilt);
+        let rotation = Quat::from_rotation_x(tilt);
+        tf.rotation = rotation;
+
+        // Update cache if present
+        if let Some(mut cache) = cache {
+            cache.last_xy = xy;
+            cache.cached_z = final_z;
+            cache.cached_rotation = rotation;
+        }
     }
 }
 

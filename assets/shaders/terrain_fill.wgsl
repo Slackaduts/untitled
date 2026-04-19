@@ -63,9 +63,37 @@ fn terrain_id_at(tile: vec2<i32>) -> u32 {
     }
     let uv = (vec2<f32>(f32(tile.x), f32(tile.y)) + 0.5) / ms;
     let s = textureSampleLevel(terrain_map, terrain_sampler, uv, 0.0);
-    if s.a < 0.1 { return ID_EMPTY; }
     // R channel stores the terrain ID as a normalized float (id/255).
-    return u32(round(s.r * 255.0));
+    // ID 0 = empty (A channel now stores shallows info, not emptiness).
+    let id = u32(round(s.r * 255.0));
+    if id == 0u { return ID_EMPTY; }
+    return id;
+}
+
+// ── Precomputed channel helpers ────────────────────────────────────────────
+// Terrain map packs: R=terrain ID, G=neighbor bitmask, B=river depth, A=shallows info
+// Bit ordering for bitmask: 0=N 1=S 2=E 3=W 4=NE 5=NW 6=SE 7=SW
+
+fn terrain_sample_all(tile: vec2<i32>) -> vec4<f32> {
+    let ms = params.map_size;
+    let uv = (vec2<f32>(f32(tile.x), f32(tile.y)) + 0.5) / ms;
+    return textureSampleLevel(terrain_map, terrain_sampler, uv, 0.0);
+}
+
+fn neighbor_bitmask(s: vec4<f32>) -> u32 {
+    return u32(round(s.g * 255.0));
+}
+
+fn precomputed_river_depth(s: vec4<f32>) -> f32 {
+    return s.b; // Already 0-1 range (was quantized from 0-255 on CPU)
+}
+
+fn precomputed_shallows_info(s: vec4<f32>) -> vec2<f32> {
+    // A channel: high nibble = depth_index, low nibble = stack_height
+    let packed = u32(round(s.a * 255.0));
+    let depth_idx = f32(packed >> 4u);
+    let stack_h = f32(packed & 0xFu);
+    return vec2(depth_idx, stack_h);
 }
 
 // ── Noise ───────────────────────────────────────────────────────────────────
@@ -116,43 +144,18 @@ fn fbm3(p: vec2<f32>) -> f32 {
 
 // ── State: RIVER ────────────────────────────────────────────────────────────
 
-// Distance to nearest non-watery tile from a tile center (integer coords).
-fn river_depth_at_tile(tc: vec2<i32>) -> f32 {
-    var min_dist = 6.0;
-    for (var dir = 0u; dir < 4u; dir++) {
-        var step: vec2<i32>;
-        switch dir {
-            case 0u { step = vec2(0, 1); }
-            case 1u { step = vec2(0, -1); }
-            case 2u { step = vec2(1, 0); }
-            case 3u { step = vec2(-1, 0); }
-            default { step = vec2(0, 0); }
-        }
-        var dist = 0.5; // start at half-tile (center to edge)
-        for (var i = 1; i <= 6; i++) {
-            let neighbor = terrain_id_at(tc + step * i);
-            if neighbor == ID_EMPTY || (!is_watery(neighbor)) {
-                break;
-            }
-            dist += 1.0;
-        }
-        min_dist = min(min_dist, dist);
-    }
-    return clamp(min_dist / 4.0, 0.0, 1.0);
-}
-
-// Bilinearly interpolated depth — samples 4 neighboring tile centers
-// for smooth Minecraft-style blending across tile boundaries.
+// Bilinearly interpolated depth — reads precomputed B channel from 4 neighboring tiles
+// for smooth blending across tile boundaries. Replaces the expensive per-tile walk.
 fn river_depth_at(tc: vec2<i32>, local: vec2<f32>) -> f32 {
     // Offset so we interpolate between the 4 nearest tile centers
     let offset = local - 0.5; // -0.5..0.5 from tile center
     let base = tc + vec2(select(0, -1, offset.x < 0.0), select(0, -1, offset.y < 0.0));
     let f = fract(local + 0.5); // interpolation weight (0..1 between the two centers)
 
-    let d00 = river_depth_at_tile(base);
-    let d10 = river_depth_at_tile(base + vec2(1, 0));
-    let d01 = river_depth_at_tile(base + vec2(0, 1));
-    let d11 = river_depth_at_tile(base + vec2(1, 1));
+    let d00 = precomputed_river_depth(terrain_sample_all(base));
+    let d10 = precomputed_river_depth(terrain_sample_all(base + vec2(1, 0)));
+    let d01 = precomputed_river_depth(terrain_sample_all(base + vec2(0, 1)));
+    let d11 = precomputed_river_depth(terrain_sample_all(base + vec2(1, 1)));
 
     return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
 }
@@ -189,6 +192,18 @@ fn fill_water(world_px: vec2<f32>, time: f32) -> vec4<f32> {
     col += hi * 0.5 * smoothstep(0.7, 0.8, foam);
 
     return vec4<f32>(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
+}
+
+// Lighter water approximation for transition zones — 2 noise calls instead of ~8.
+// Includes surface color so shore blending isn't unnaturally dark.
+fn fill_water_cheap(world_px: vec2<f32>, time: f32) -> vec3<f32> {
+    let p = world_px / tilemap_data.tile_size.x;
+    let flow = params.water_flow_dir * params.water_flow_speed * 1.8 * time;
+    let n1 = value_noise(p * 0.8 + flow * 0.5);
+    let n2 = value_noise(p * 2.5 + flow * 1.2);
+    var col = mix(params.water_mid.rgb, params.water_surface.rgb, n1 * 0.5);
+    col += params.water_highlight.rgb * n2 * 0.15;
+    return col;
 }
 
 // River with depth darkening — called from fragment when we have tile coords
@@ -236,36 +251,17 @@ fn fill_stone(world_px: vec2<f32>) -> vec4<f32> {
 // counts the contiguous column of shallows tiles and applies a segmented
 // opacity falloff so deeper rows show more water over the rock.
 
-fn shallows_stack_info(tc: vec2<i32>) -> vec2<f32> {
-    // Walk up to find the top of this shallows column
-    var top = tc.y;
-    for (var i = 1; i < 8; i++) {
-        if terrain_id_at(vec2(tc.x, tc.y + i)) == ID_SHALLOWS {
-            top = tc.y + i;
-        } else {
-            break;
-        }
-    }
-    // Walk down to find the bottom
-    var bottom = tc.y;
-    for (var i = 1; i < 8; i++) {
-        if terrain_id_at(vec2(tc.x, tc.y - i)) == ID_SHALLOWS {
-            bottom = tc.y - i;
-        } else {
-            break;
-        }
-    }
-    let stack_height = f32(top - bottom + 1);
-    let depth_index = f32(top - tc.y); // 0 = top (shallowest), increases downward
-    return vec2(depth_index, stack_height);
+fn shallows_stack_info(tc: vec2<i32>, sample: vec4<f32>) -> vec2<f32> {
+    // Read precomputed stack info from A channel (high nibble=depth_idx, low=stack_height)
+    return precomputed_shallows_info(sample);
 }
 
-fn fill_shallows(world_px: vec2<f32>, time: f32, tc: vec2<i32>, local: vec2<f32>) -> vec4<f32> {
+fn fill_shallows(world_px: vec2<f32>, time: f32, tc: vec2<i32>, local: vec2<f32>, sample: vec4<f32>) -> vec4<f32> {
     let stone_col = fill_stone(world_px).rgb;
     let water_col = fill_river_with_depth(world_px, time, tc, local).rgb;
 
     // Stack info: x = depth index (0=top), y = total height
-    let info = shallows_stack_info(tc);
+    let info = shallows_stack_info(tc, sample);
     let depth_idx = info.x;
     let stack_h = info.y;
 
@@ -306,7 +302,7 @@ fn terrain_fill(id: u32, world_px: vec2<f32>, time: f32) -> vec4<f32> {
         case 9u /* SHALLOWS */ {
             // Simplified fill — used by transitions sampling neighbors
             let stone_col = fill_stone(world_px).rgb;
-            let water_col = fill_water(world_px, time).rgb;
+            let water_col = fill_water_cheap(world_px, time);
             return vec4<f32>(mix(min(stone_col, water_col), water_col, 0.25), 1.0);
         }
         default                { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
@@ -338,8 +334,8 @@ fn water_shore(sdf: f32, world_px: vec2<f32>, land_col: vec3<f32>,
         let submerged = land_col * mix(vec3(0.7, 0.75, 0.85), deep_col * 2.0, depth * 0.6);
 
         // What we blend toward: for shallows, blend into stone-under-water;
-        // for open water, blend into water
-        let water_col = fill_water(world_px, time).rgb;
+        // for open water, blend into water (cheap approximation — transition zone)
+        let water_col = fill_water_cheap(world_px, time);
         var far_col: vec3<f32>;
         if here_id == ID_SHALLOWS {
             // Blend toward stone — the shallows base fill handles the water overlay
@@ -543,7 +539,9 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     );
     let tc = vec2<i32>(tile_pos);
 
-    let here = terrain_id_at(tc);
+    // Single texture read gets all precomputed channels
+    let sample = terrain_sample_all(tc);
+    let here = u32(round(sample.r * 255.0));
     if here == ID_EMPTY || here >= 10u { discard; } // IDs 10-17 are depth/slope tiles
 
     // Specialized fills that need tile coords / local position
@@ -552,40 +550,44 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     if here == ID_RIVER {
         base = fill_river_with_depth(world_px, globals.time, tc, local);
     } else if here == ID_SHALLOWS {
-        base = fill_shallows(world_px, globals.time, tc, local);
+        base = fill_shallows(world_px, globals.time, tc, local, sample);
     } else {
         base = terrain_fill(here, world_px, globals.time);
     }
     base.a = 1.0;
 
-    // ── Neighbor terrain IDs ────────────────────────────────────────
-    let id_n  = terrain_id_at(tc + vec2( 0,  1));
-    let id_s  = terrain_id_at(tc + vec2( 0, -1));
-    let id_e  = terrain_id_at(tc + vec2( 1,  0));
-    let id_w  = terrain_id_at(tc + vec2(-1,  0));
+    // ── Early exit: precomputed bitmask tells us if any neighbors differ ──
+    let mask = neighbor_bitmask(sample);
+    if mask == 0u {
+        return base;
+    }
+
+    // Bit ordering: 0=N 1=S 2=E 3=W 4=NE 5=NW 6=SE 7=SW
+    let bn  = (mask & 1u)   != 0u;
+    let bs  = (mask & 2u)   != 0u;
+    let be  = (mask & 4u)   != 0u;
+    let bw  = (mask & 8u)   != 0u;
+    let bne = (mask & 16u)  != 0u;
+    let bnw = (mask & 32u)  != 0u;
+    let bse = (mask & 64u)  != 0u;
+    let bsw = (mask & 128u) != 0u;
+
+    // Only read neighbor IDs for directions that actually differ
+    var id_n  = ID_EMPTY; if bn  { id_n  = terrain_id_at(tc + vec2( 0,  1)); }
+    var id_s  = ID_EMPTY; if bs  { id_s  = terrain_id_at(tc + vec2( 0, -1)); }
+    var id_e  = ID_EMPTY; if be  { id_e  = terrain_id_at(tc + vec2( 1,  0)); }
+    var id_w  = ID_EMPTY; if bw  { id_w  = terrain_id_at(tc + vec2(-1,  0)); }
+    var id_ne = ID_EMPTY; if bne { id_ne = terrain_id_at(tc + vec2( 1,  1)); }
+    var id_nw = ID_EMPTY; if bnw { id_nw = terrain_id_at(tc + vec2(-1,  1)); }
+    var id_se = ID_EMPTY; if bse { id_se = terrain_id_at(tc + vec2( 1, -1)); }
+    var id_sw = ID_EMPTY; if bsw { id_sw = terrain_id_at(tc + vec2(-1, -1)); }
+
     // Diagonal shallows → treat as water so they don't block adjacent water transitions
-    var id_ne = terrain_id_at(tc + vec2( 1,  1));
-    var id_nw = terrain_id_at(tc + vec2(-1,  1));
-    var id_se = terrain_id_at(tc + vec2( 1, -1));
-    var id_sw = terrain_id_at(tc + vec2(-1, -1));
     if !is_watery(here) {
         if id_ne == ID_SHALLOWS { id_ne = ID_RIVER; }
         if id_nw == ID_SHALLOWS { id_nw = ID_RIVER; }
         if id_se == ID_SHALLOWS { id_se = ID_RIVER; }
         if id_sw == ID_SHALLOWS { id_sw = ID_RIVER; }
-    }
-
-    let bn  = id_n  != ID_EMPTY && id_n  != here;
-    let bs  = id_s  != ID_EMPTY && id_s  != here;
-    let be  = id_e  != ID_EMPTY && id_e  != here;
-    let bw  = id_w  != ID_EMPTY && id_w  != here;
-    let bne = id_ne != ID_EMPTY && id_ne != here;
-    let bnw = id_nw != ID_EMPTY && id_nw != here;
-    let bse = id_se != ID_EMPTY && id_se != here;
-    let bsw = id_sw != ID_EMPTY && id_sw != here;
-
-    if !(bn || bs || be || bw || bne || bnw || bse || bsw) {
-        return base;
     }
 
     // ── Tile-local coords for SDF ───────────────────────────────────

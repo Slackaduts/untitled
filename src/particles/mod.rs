@@ -38,9 +38,12 @@ impl Plugin for ParticlePlugin {
                     systems::attach_hanabi_effects,
                     systems::sync_emitter_to_hanabi
                         .after(systems::attach_hanabi_effects),
+                    // Cull off-screen emitters before spawning.
+                    emitter::cull_particle_emitters,
                     // CPU emissive particles (visible + light tracking).
                     systems::spawn_emissive_particles
-                        .after(systems::attach_hanabi_effects),
+                        .after(systems::attach_hanabi_effects)
+                        .after(emitter::cull_particle_emitters),
                     systems::update_emissive_particles
                         .after(systems::spawn_emissive_particles),
                     systems::orient_emissive_particles
@@ -64,13 +67,17 @@ impl Plugin for ParticlePlugin {
                     (
                         editor::toggle_particle_editor,
                         editor::particle_editor_ui
-                            .after(editor::toggle_particle_editor),
+                            .after(editor::toggle_particle_editor)
+                            .run_if(|state: Res<editor::ParticleEditorState>| state.open),
                         editor::place_emitter_on_click
-                            .after(editor::particle_editor_ui),
+                            .after(editor::particle_editor_ui)
+                            .run_if(|state: Res<editor::ParticleEditorState>| state.open),
                         editor::draw_emitter_gizmos
-                            .after(editor::particle_editor_ui),
+                            .after(editor::particle_editor_ui)
+                            .run_if(|state: Res<editor::ParticleEditorState>| state.open),
                         editor::particle_editor_preview
-                            .after(editor::particle_editor_ui),
+                            .after(editor::particle_editor_ui)
+                            .run_if(|state: Res<editor::ParticleEditorState>| state.open),
                     ),
                 );
         }

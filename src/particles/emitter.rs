@@ -61,3 +61,33 @@ impl ParticleEmitter {
         self
     }
 }
+
+/// Marker: this emitter was deactivated by the culling system, not by game logic.
+/// Used to distinguish culling-off from intentionally-off emitters.
+#[derive(Component)]
+pub struct CulledEmitter;
+
+const PARTICLE_CULL_MARGIN: f32 = 100.0;
+
+/// Deactivates emitters outside the camera's visible area and reactivates
+/// them when they come back into range.
+pub fn cull_particle_emitters(
+    mut commands: Commands,
+    rect: Res<crate::camera::visible_rect::CameraVisibleRect>,
+    mut emitters: Query<(Entity, &GlobalTransform, &mut ParticleEmitter, Option<&CulledEmitter>)>,
+) {
+    for (entity, gtf, mut emitter, culled) in &mut emitters {
+        let pos = gtf.translation().truncate();
+        let in_range = rect.contains_point(pos, PARTICLE_CULL_MARGIN);
+
+        if in_range {
+            if culled.is_some() {
+                emitter.active = true;
+                commands.entity(entity).remove::<CulledEmitter>();
+            }
+        } else if emitter.active && culled.is_none() {
+            emitter.active = false;
+            commands.entity(entity).insert(CulledEmitter);
+        }
+    }
+}

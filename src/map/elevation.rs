@@ -64,6 +64,12 @@ pub struct ElevationHeights {
     pub z_by_level: std::collections::HashMap<u8, f32>,
 }
 
+/// World-space bounding boxes per elevation level, used for frustum culling.
+#[derive(Resource, Default)]
+pub struct ElevationBounds {
+    pub by_level: std::collections::HashMap<u8, (f32, f32, f32, f32)>, // (min_x, min_y, max_x, max_y)
+}
+
 /// What kind of terrain layer this is.
 pub enum LayerKind {
     /// Regular terrain: participates in procedural fill + elevation quads.
@@ -119,6 +125,7 @@ pub fn setup_elevation_meshes(
     particle_buf: Res<crate::particles::gpu_lights::ParticleLightBuffer>,
     mut elev_materials: ResMut<ElevationMaterials>,
     mut elev_heights: ResMut<ElevationHeights>,
+    mut elev_bounds: ResMut<ElevationBounds>,
     slope_maps: Res<super::slope::SlopeHeightMaps>,
     layers: Query<
         (Entity, &TileElevation, &TileStorage, &TilemapSize, &TilemapTileSize),
@@ -155,7 +162,6 @@ pub fn setup_elevation_meshes(
     let Some((map_w, map_h, _tw, _th)) = map_dims else {
         return;
     };
-    let map_center = Vec2::new(map_w * 0.5, map_h * 0.5);
 
     // Compute tile bounding boxes per level
     let mut level_bounds: std::collections::HashMap<u8, (f32, f32, f32, f32)> = std::collections::HashMap::new();
@@ -178,12 +184,36 @@ pub fn setup_elevation_meshes(
         }
     }
 
+    // Store bounds for frustum culling
+    for (&level, &bounds) in &level_bounds {
+        elev_bounds.by_level.insert(level, bounds);
+    }
+
     for (&level, entities) in &elevation_groups {
         let rl = render_layer_for_elevation(level);
 
+        // For levels > 0 with known bounds, right-size the render target to the
+        // bounding box + padding instead of using full map resolution.
+        let pad = _tw * 2.0; // 2 tiles of padding for transition bleed
+        let (rt_min_x, rt_min_y, rt_max_x, rt_max_y, rt_w, rt_h) = if level > 0 {
+            if let Some(&(bmin_x, bmin_y, bmax_x, bmax_y)) = level_bounds.get(&level) {
+                let rmin_x = (bmin_x - pad).max(0.0);
+                let rmin_y = (bmin_y - pad).max(0.0);
+                let rmax_x = (bmax_x + pad).min(map_w);
+                let rmax_y = (bmax_y + pad).min(map_h);
+                (rmin_x, rmin_y, rmax_x, rmax_y, rmax_x - rmin_x, rmax_y - rmin_y)
+            } else {
+                (0.0, 0.0, map_w, map_h, map_w, map_h)
+            }
+        } else {
+            (0.0, 0.0, map_w, map_h, map_w, map_h)
+        };
+
+        let rt_center = Vec2::new((rt_min_x + rt_max_x) * 0.5, (rt_min_y + rt_max_y) * 0.5);
+
         let extent = Extent3d {
-            width: map_w as u32,
-            height: map_h as u32,
+            width: rt_w as u32,
+            height: rt_h as u32,
             depth_or_array_layers: 1,
         };
         let mut rt_image = Image {
@@ -216,12 +246,12 @@ pub fn setup_elevation_meshes(
                 near: -1000.0,
                 far: 1000.0,
                 scaling_mode: bevy::camera::ScalingMode::Fixed {
-                    width: map_w,
-                    height: map_h,
+                    width: rt_w,
+                    height: rt_h,
                 },
                 ..OrthographicProjection::default_2d()
             }),
-            Transform::from_xyz(map_center.x, map_center.y, 0.0),
+            Transform::from_xyz(rt_center.x, rt_center.y, 0.0),
             RenderLayers::layer(rl),
             ElevationRenderCam { level },
         ));
@@ -308,51 +338,16 @@ pub fn setup_elevation_meshes(
 
                     positions.push([world_x - cx, world_y - cy, corner_z]);
 
-                    let u = world_x / map_w;
-                    let v = 1.0 - world_y / map_h; // RTT Y flip
+                    // UVs relative to the (possibly cropped) render target
+                    let u = (world_x - rt_min_x) / rt_w;
+                    let v = 1.0 - (world_y - rt_min_y) / rt_h; // RTT Y flip
                     uvs.push([u, v]);
                 }
             }
 
-            // Normals: compute per-vertex from adjacent face normals
-            let mut normals = vec![[0.0f32, 0.0, 1.0]; num_verts];
-            for ty in 0..tiles_h {
-                for tx in 0..tiles_w {
-                    let sw = ty * verts_w + tx;
-                    let se = sw + 1;
-                    let nw = sw + verts_w;
-                    let ne = nw + 1;
-
-                    let p_sw = Vec3::from(positions[sw]);
-                    let p_se = Vec3::from(positions[se]);
-                    let p_nw = Vec3::from(positions[nw]);
-                    let p_ne = Vec3::from(positions[ne]);
-
-                    // Two triangles: SW→SE→NE and SW→NE→NW
-                    let n1 = (p_se - p_sw).cross(p_ne - p_sw);
-                    let n2 = (p_ne - p_sw).cross(p_nw - p_sw);
-
-                    for &vi in &[sw, se, ne] {
-                        normals[vi][0] += n1.x;
-                        normals[vi][1] += n1.y;
-                        normals[vi][2] += n1.z;
-                    }
-                    for &vi in &[sw, ne, nw] {
-                        normals[vi][0] += n2.x;
-                        normals[vi][1] += n2.y;
-                        normals[vi][2] += n2.z;
-                    }
-                }
-            }
-            // Force all normals to point straight up (+Z). This gives uniform
-            // diffuse lighting across the terrain regardless of slope geometry,
-            // preventing bright patches from directional light hitting angled faces.
-            // Shadows still work correctly (they use depth, not normals).
-            for n in &mut normals {
-                n[0] = 0.0;
-                n[1] = 0.0;
-                n[2] = 1.0;
-            }
+            // All normals point straight up (+Z) for uniform diffuse lighting
+            // regardless of slope geometry. Shadows use depth, not normals.
+            let normals = vec![[0.0f32, 0.0, 1.0]; num_verts];
 
             // Indices: two triangles per tile
             let mut indices = Vec::with_capacity(tiles_w * tiles_h * 6);
@@ -383,10 +378,11 @@ pub fn setup_elevation_meshes(
             // ── Flat quad clipped to tile bounding box ──
             let hw = (max_x - min_x) * 0.5;
             let hh = (max_y - min_y) * 0.5;
-            let u0 = min_x / map_w;
-            let u1 = max_x / map_w;
-            let v0 = 1.0 - max_y / map_h;
-            let v1 = 1.0 - min_y / map_h;
+            // UVs relative to the (possibly cropped) render target
+            let u0 = (min_x - rt_min_x) / rt_w;
+            let u1 = (max_x - rt_min_x) / rt_w;
+            let v0 = 1.0 - (max_y - rt_min_y) / rt_h;
+            let v1 = 1.0 - (min_y - rt_min_y) / rt_h;
 
             meshes.add(
                 Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
@@ -415,8 +411,72 @@ pub fn setup_elevation_meshes(
         ));
 
         info!(
-            "Elevation {level}: render layer {rl}, {} tilemap layer(s), quad at Z={z}",
-            entities.len()
+            "Elevation {level}: render layer {rl}, {} tilemap layer(s), quad at Z={z}, RT {}x{}",
+            entities.len(), rt_w as u32, rt_h as u32
         );
+    }
+}
+
+/// Disable elevation render cameras whose level bounds are entirely off-screen.
+pub fn cull_offscreen_elevation_cameras(
+    main_cam: Query<(&Camera, &GlobalTransform), With<crate::camera::CombatCamera3d>>,
+    mut elev_cams: Query<(&mut Camera, &ElevationRenderCam), Without<crate::camera::CombatCamera3d>>,
+    elev_bounds: Res<ElevationBounds>,
+    elev_heights: Res<ElevationHeights>,
+) {
+    let Ok((cam, cam_gt)) = main_cam.single() else {
+        return;
+    };
+    let Some(viewport_rect) = cam.logical_viewport_rect() else {
+        return;
+    };
+
+    // Margin in world units to prevent pop-in (2 tiles worth)
+    let margin = 96.0;
+
+    for (mut elev_cam, elev_render) in &mut elev_cams {
+        let level = elev_render.level;
+        let Some(&(min_x, min_y, max_x, max_y)) = elev_bounds.by_level.get(&level) else {
+            continue;
+        };
+        let z = elev_heights.z_by_level.get(&level).copied().unwrap_or(0.0);
+
+        // Project the 4 corners of the level's bounding box to screen space
+        let corners = [
+            Vec3::new(min_x - margin, min_y - margin, z),
+            Vec3::new(max_x + margin, min_y - margin, z),
+            Vec3::new(min_x - margin, max_y + margin, z),
+            Vec3::new(max_x + margin, max_y + margin, z),
+        ];
+
+        let mut any_visible = false;
+        let vp_min = viewport_rect.min;
+        let vp_max = viewport_rect.max;
+
+        for corner in &corners {
+            if let Ok(screen_pos) = cam.world_to_viewport(cam_gt, *corner) {
+                // Check if the projected point is within the expanded viewport
+                if screen_pos.x >= vp_min.x - margin
+                    && screen_pos.x <= vp_max.x + margin
+                    && screen_pos.y >= vp_min.y - margin
+                    && screen_pos.y <= vp_max.y + margin
+                {
+                    any_visible = true;
+                    break;
+                }
+            }
+        }
+
+        // Also check if the camera is inside the bounds (all corners could project behind)
+        let cam_pos = cam_gt.translation();
+        if cam_pos.x >= min_x - margin
+            && cam_pos.x <= max_x + margin
+            && cam_pos.y >= min_y - margin
+            && cam_pos.y <= max_y + margin
+        {
+            any_visible = true;
+        }
+
+        elev_cam.is_active = any_visible;
     }
 }

@@ -41,6 +41,9 @@
 
             # Lua
             lua5_4
+
+            # Profiling
+            tracy
           ];
 
           LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;

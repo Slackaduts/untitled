@@ -17,7 +17,7 @@ pub struct MapBounds {
 }
 
 const DEFAULT_FOLLOW_SPEED: f32 = 5.0;
-const DEFAULT_HEIGHT: f32 = 900.0;
+pub const DEFAULT_HEIGHT: f32 = 900.0;
 /// Y offset as a fraction of camera height — positions the camera "south" of
 /// the target so it looks slightly northward, giving a tilted 3/4 perspective.
 pub const OVERWORLD_TILT_OFFSET: f32 = 0.9;

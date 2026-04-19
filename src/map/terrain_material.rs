@@ -133,6 +133,98 @@ impl MaterialTilemap for TerrainMaterial {
     }
 }
 
+// ── Precomputation helpers ─────────────────────────────────────────────────
+
+const DIRS: [(i32, i32); 8] = [
+    (0, 1), (0, -1), (1, 0), (-1, 0),  // N, S, E, W
+    (1, 1), (-1, 1), (1, -1), (-1, -1), // NE, NW, SE, SW
+];
+
+fn pixel_id(pixels: &[u8], x: i32, y: i32, w: usize, h: usize) -> u8 {
+    if x < 0 || y < 0 || x >= w as i32 || y >= h as i32 {
+        terrain_id::EMPTY
+    } else {
+        pixels[(y as usize * w + x as usize) * 4]
+    }
+}
+
+fn is_watery(id: u8) -> bool {
+    id == terrain_id::RIVER || id == terrain_id::SHALLOWS
+}
+
+fn river_depth_at_tile(pixels: &[u8], tx: i32, ty: i32, w: usize, h: usize) -> f32 {
+    let mut min_dist: f32 = 6.0;
+    for dir_idx in 0..4 {
+        let (dx, dy) = DIRS[dir_idx];
+        let mut dist: f32 = 0.5;
+        for i in 1..=6i32 {
+            let neighbor = pixel_id(pixels, tx + dx * i, ty + dy * i, w, h);
+            if neighbor == terrain_id::EMPTY || !is_watery(neighbor) {
+                break;
+            }
+            dist += 1.0;
+        }
+        min_dist = min_dist.min(dist);
+    }
+    (min_dist / 4.0).clamp(0.0, 1.0)
+}
+
+fn precompute_terrain_channels(pixels: &mut [u8], w: usize, h: usize) {
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y * w + x) * 4;
+            let here = pixels[idx];
+            if here == terrain_id::EMPTY {
+                pixels[idx + 3] = 0;
+                continue;
+            }
+
+            // G: neighbor bitmask
+            let mut mask = 0u8;
+            for (bit, &(dx, dy)) in DIRS.iter().enumerate() {
+                let neighbor = pixel_id(pixels, x as i32 + dx, y as i32 + dy, w, h);
+                if neighbor != terrain_id::EMPTY && neighbor != here {
+                    mask |= 1 << bit;
+                }
+            }
+            pixels[idx + 1] = mask;
+
+            // B: river depth (only for watery tiles)
+            if is_watery(here) {
+                let depth = river_depth_at_tile(pixels, x as i32, y as i32, w, h);
+                pixels[idx + 2] = (depth * 255.0) as u8;
+            } else {
+                pixels[idx + 2] = 0;
+            }
+
+            // A: shallows stack info, or 255 for non-shallows
+            if here == terrain_id::SHALLOWS {
+                let mut top = y as i32;
+                for i in 1..8i32 {
+                    if pixel_id(pixels, x as i32, y as i32 + i, w, h) == terrain_id::SHALLOWS {
+                        top = y as i32 + i;
+                    } else {
+                        break;
+                    }
+                }
+                let mut bottom = y as i32;
+                for i in 1..8i32 {
+                    if pixel_id(pixels, x as i32, y as i32 - i, w, h) == terrain_id::SHALLOWS {
+                        bottom = y as i32 - i;
+                    } else {
+                        break;
+                    }
+                }
+                let stack_height = ((top - bottom + 1) as u8).min(15);
+                let depth_index = ((top - y as i32) as u8).min(15);
+                pixels[idx + 3] = (depth_index << 4) | stack_height;
+            } else {
+                pixels[idx + 3] = 255;
+            }
+        }
+    }
+}
+
 // ── Terrain type map generation ─────────────────────────────────────────────
 
 #[derive(Component)]
@@ -247,6 +339,15 @@ pub fn build_terrain_and_attach_material(
                 }
             }
         }
+
+        // ── Second pass: precompute G/B/A channels ───────────────────────
+        // G = neighbor-differs bitmask (8 bits: N,S,E,W,NE,NW,SE,SW)
+        // B = river depth quantized to 0-255
+        // A = shallows stack info (high nibble=depth_idx, low=stack_height), 255 otherwise
+        //
+        // Bit ordering for neighbor bitmask (matches shader expectations):
+        //   0=N  1=S  2=E  3=W  4=NE  5=NW  6=SE  7=SW
+        precompute_terrain_channels(&mut pixels, w, h);
 
         let mut image = Image::new(
             Extent3d { width: w as u32, height: h as u32, depth_or_array_layers: 1 },

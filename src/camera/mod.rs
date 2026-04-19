@@ -1,11 +1,12 @@
 pub mod combat;
 pub mod cutscene;
 pub mod follow;
+pub mod visible_rect;
 
 use bevy::audio::SpatialListener;
 use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
-use bevy::light::{ShadowFilteringMethod, VolumetricFog};
+use bevy::light::ShadowFilteringMethod;
 use crate::app_state::GameState;
 use crate::sound::spatial::GameListener;
 
@@ -19,10 +20,13 @@ impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<combat::CombatCamera>()
             .init_resource::<combat::BillboardTilesReady>()
+            .init_resource::<combat::BillboardCameraState>()
+            .init_resource::<visible_rect::CameraVisibleRect>()
             .add_systems(Startup, spawn_camera)
             .add_systems(
                 Update,
                 (
+                    visible_rect::update_camera_visible_rect,
                     follow::camera_follow,
                     combat::setup_billboard_tiles,
                     combat::combat_camera_system,
@@ -66,12 +70,5 @@ fn spawn_camera(mut commands: Commands) {
         ShadowFilteringMethod::Gaussian,
         Msaa::Off,
         Smaa { preset: SmaaPreset::Low },
-        // Volumetric fog for god rays from the sun.
-        VolumetricFog {
-            ambient_color: Color::WHITE,
-            ambient_intensity: 0.0,
-            step_count: 32,
-            ..default()
-        },
     ));
 }

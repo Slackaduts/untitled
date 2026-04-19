@@ -2,7 +2,6 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::prelude::*;
 
-use bevy::light::{FogVolume, VolumetricLight};
 
 use super::components::SunLight;
 
@@ -102,31 +101,18 @@ pub fn spawn_sun_light(mut commands: Commands) {
             Quat::from_euler(EulerRot::YXZ, PI * 0.5, -(FRAC_PI_2 - 60.0_f32.to_radians()), 0.0),
         ),
         CascadeShadowConfigBuilder {
-            num_cascades: 2,
+            num_cascades: 1,
             minimum_distance: 600.0,
             maximum_distance: 1800.0,
-            first_cascade_far_bound: 1000.0,
-            overlap_proportion: 0.3,
+            first_cascade_far_bound: 1800.0,
+            overlap_proportion: 0.0,
         }
         .build(),
-        // Enable volumetric light (god rays) from the sun.
-        VolumetricLight,
     ));
     // Lower shadow map resolution → larger texels → naturally softer shadow
     // edges. 1024 with Gaussian PCF gives a gentle, diffuse look.
     commands.insert_resource(bevy::light::DirectionalLightShadowMap { size: 1024 });
 
-    // Global fog volume for god rays — covers the entire visible area.
-    commands.spawn(FogVolume {
-        density_factor: 0.01,
-        absorption: 0.0,
-        scattering: 0.15,
-        scattering_asymmetry: 0.85,
-        fog_color: Color::WHITE,
-        light_tint: Color::linear_rgb(1.0, 0.95, 0.80),
-        light_intensity: 0.6,
-        ..default()
-    });
 }
 
 /// Rotates the sun DirectionalLight based on TimeOfDay.
