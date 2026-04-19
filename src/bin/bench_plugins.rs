@@ -27,8 +27,12 @@ fn main() {
         ..default()
     }));
 
-    app.add_plugins(FrameTimeDiagnosticsPlugin::default());
     app.add_plugins(LogDiagnosticsPlugin::default());
+
+    // MapPlugin adds FrameTimeDiagnosticsPlugin; add it ourselves if map is off
+    if !ENABLE_MAP {
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default());
+    }
 
     // Always needed
     app.init_state::<untitled::app_state::GameState>();
