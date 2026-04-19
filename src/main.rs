@@ -22,6 +22,23 @@ fn toggle_fullscreen(
     }
 }
 
+/// Workaround for wgpu Vulkan backend on Windows: launching with AutoNoVsync
+/// then switching to AutoVsync after a few frames fixes frame timing issues
+/// where prepare_windows blocks for 20-30ms regardless of present mode.
+#[cfg(target_os = "windows")]
+fn windows_present_mode_fix(
+    mut windows: Query<&mut Window>,
+    mut frames: Local<u32>,
+) {
+    *frames += 1;
+    if *frames == 10 {
+        if let Some(mut window) = windows.iter_mut().next() {
+            window.present_mode = PresentMode::AutoVsync;
+            info!("Switched present mode to AutoVsync (Windows wgpu workaround)");
+        }
+    }
+}
+
 fn main() {
     let mut app = App::new();
 
@@ -30,7 +47,7 @@ fn main() {
             primary_window: Some(Window {
                 title: "Untitled JRPG".into(),
                 resolution: bevy::window::WindowResolution::new(1280, 720),
-                present_mode: PresentMode::Immediate,
+                present_mode: PresentMode::AutoNoVsync,
                 ..default()
             }),
             ..default()
@@ -59,6 +76,10 @@ fn main() {
     app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default());
 
     app.add_plugins(UntitledPlugin)
-        .add_systems(Update, toggle_fullscreen)
-        .run();
+        .add_systems(Update, toggle_fullscreen);
+
+    #[cfg(target_os = "windows")]
+    app.add_systems(Update, windows_present_mode_fix);
+
+    app.run();
 }
