@@ -85,12 +85,18 @@ pub fn compute_ambient_from_time(
 pub fn spawn_sun_light(mut commands: Commands) {
     use bevy::light::cascade::CascadeShadowConfigBuilder;
 
+    // Directional light shadows add a full render pass each frame. On Metal
+    // (Apple Silicon tiled GPU) this is disproportionately expensive for
+    // minimal visual benefit in a top-down 2D game — billboard self-shadows
+    // already handle per-sprite depth via the depth map shader.
+    let shadows_enabled = !cfg!(target_os = "macos");
+
     commands.spawn((
         SunLight,
         DirectionalLight {
             color: Color::WHITE,
             illuminance: 8_000.0,
-            shadows_enabled: true,
+            shadows_enabled,
             // Higher biases push shadow edges outward, softening them and
             // hiding hard stair-step artifacts from the shadow map.
             shadow_depth_bias: 1.0,

@@ -54,6 +54,10 @@ impl Plugin for MapPlugin {
         app.add_plugins(PhysicsDebugPlugin::default());
 
         app
+            // No forces or gravity — physics is used purely for collision
+            // detection. 1 substep (down from default 6) is sufficient and
+            // eliminates ~80% of solver overhead.
+            .insert_resource(avian3d::dynamics::solver::schedule::SubstepCount(1))
             .insert_resource(Gravity(Vec3::ZERO))
             .init_resource::<MapBounds>()
             .init_resource::<ElevationConfig>()
@@ -165,16 +169,40 @@ fn toggle_debug_overlay(
 }
 
 /// Update FPS text each frame when visible.
+/// Shows FPS, smoothed frame time, and worst-frame time. The max value
+/// reveals intermittent spikes that smoothed averages hide.
 fn update_fps_display(
     diagnostics: Res<DiagnosticsStore>,
     mut query: Query<&mut Text, With<FpsText>>,
+    time: Res<Time>,
+    mut worst: Local<(f32, f32)>, // (worst_ms, timer)
 ) {
+    // Track raw frame time (not smoothed) to catch spikes
+    let raw_ms = time.delta_secs() * 1000.0;
+    worst.1 -= time.delta_secs();
+    if raw_ms > worst.0 {
+        worst.0 = raw_ms;
+    }
+    // Reset worst every 2 seconds so it stays relevant
+    if worst.1 <= 0.0 {
+        worst.0 = raw_ms;
+        worst.1 = 2.0;
+    }
+
     for mut text in &mut query {
-        if let Some(fps) = diagnostics
+        let fps = diagnostics
             .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
-            .and_then(|d| d.smoothed())
-        {
-            **text = format!("FPS: {:.0}", fps);
+            .and_then(|d| d.smoothed());
+        let frame_time = diagnostics
+            .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
+            .and_then(|d| d.smoothed());
+
+        match (fps, frame_time) {
+            (Some(fps), Some(ft)) => {
+                **text = format!("FPS: {fps:.0}  ({ft:.1}ms avg, {:.1}ms worst)", worst.0);
+            }
+            (Some(fps), None) => **text = format!("FPS: {fps:.0}"),
+            _ => {}
         }
     }
 }

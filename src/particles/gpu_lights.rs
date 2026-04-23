@@ -90,8 +90,13 @@ pub fn upload_particle_lights(
     mut data: ResMut<ParticleLightData>,
 ) {
     let w = PARTICLE_TEX_WIDTH as usize;
-    let total_halfs = w * 2 * 4;
-    let mut halfs = vec![0u16; total_halfs];
+    let total_bytes = w * 2 * 4 * 2; // width × 2 rows × 4 channels × 2 bytes per f16
+
+    // Reuse the existing allocation instead of allocating a new Vec every frame.
+    data.bytes.resize(total_bytes, 0);
+    data.bytes.fill(0);
+    let halfs: &mut [u16] = bytemuck::cast_slice_mut(&mut data.bytes);
+
     // Column 0 is reserved for metadata; particles start at column 1.
     let max_particles = w - 1;
     let mut count = 0usize;
@@ -135,8 +140,6 @@ pub fn upload_particle_lights(
 
     // Column 0, row 0: metadata — x = particle count.
     halfs[0] = half::f16::from_f32(count as f32).to_bits();
-
-    data.bytes = bytemuck::cast_slice(&halfs).to_vec();
 }
 
 // ── Render-world systems ────────────────────────────────────────────────────

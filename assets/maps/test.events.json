@@ -10,8 +10,8 @@
         {
           "action_id": "run_yarn_node_at",
           "args": {
-            "node": "TestEffects",
-            "speaker": "#6"
+            "speaker": "#6",
+            "node": "TestEffects"
           }
         }
       ],

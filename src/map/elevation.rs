@@ -205,6 +205,13 @@ pub fn setup_elevation_meshes(
         let level_has_slopes = slope_maps.by_level.get(&level).is_some_and(|hm| hm.has_slopes());
         let can_viewport_track = level == 0 && !level_has_slopes;
 
+        // Render target downscale factor. The terrain shader is extremely
+        // fragment-heavy (noise, SDF transitions, multiple texture samples per
+        // pixel). Rendering at half resolution saves ~75% of fragment work with
+        // negligible visual difference — the terrain is viewed through a
+        // perspective camera that can't resolve 1:1 world-pixel detail anyway.
+        let rt_scale = 0.5_f32;
+
         let (rt_min_x, rt_min_y, rt_max_x, rt_max_y, rt_w, rt_h, is_viewport_tracked) = if can_viewport_track {
             // Viewport-sized: covers visible area + generous margin for perspective.
             // Position updated each frame by track_elevation_viewport.
@@ -226,8 +233,8 @@ pub fn setup_elevation_meshes(
         let rt_center = Vec2::new((rt_min_x + rt_max_x) * 0.5, (rt_min_y + rt_max_y) * 0.5);
 
         let extent = Extent3d {
-            width: rt_w as u32,
-            height: rt_h as u32,
+            width: (rt_w * rt_scale) as u32,
+            height: (rt_h * rt_scale) as u32,
             depth_or_array_layers: 1,
         };
         let mut rt_image = Image {
