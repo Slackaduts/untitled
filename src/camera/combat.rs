@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::light::NotShadowReceiver;
@@ -735,12 +737,20 @@ pub fn spawn_object_lights(
             };
 
             let bb_h = bb_height.height;
+            // Read sprite width for correct X positioning
+            let bb_w = {
+                let ts_name = key.0.rsplit_once('_').map(|(n,_)| n).unwrap_or(&key.0);
+                let qoi = format!("assets/objects/{ts_name}/{}/sprite.qoi", key.0);
+                let png = format!("assets/objects/{ts_name}/{}/sprite.png", key.0);
+                let path = if std::path::Path::new(&qoi).exists() { qoi } else { png };
+                image::image_dimensions(&path).map(|(w,_)| w as f32).unwrap_or(bb_h)
+            };
+            // offset_y is in image space (0=top, 1=bottom), billboard Y is up.
+            // Billboard origin: X centered, Y at center of bottom tile.
             let local = Vec3::new(
-                (light_def.offset_x - 0.5) * bb_h,
-                light_def.offset_y * bb_h,
-                // Push forward past the depth-displaced shadow volume (max_depth
-                // is up to bb_h * 0.5) so the point light doesn't self-occlude.
-                bb_h * 0.55,
+                (light_def.offset_x - 0.5) * bb_w,
+                (1.0 - light_def.offset_y) * bb_h - DEFAULT_TILE_SIZE * 0.5,
+                light_def.offset_z * bb_h,
             );
             let light_pos = bb_tf.translation + bb_tf.rotation * local;
 
@@ -764,8 +774,18 @@ pub fn spawn_object_lights(
                 },
                 crate::billboard::object_types::ObjectSpriteLight {
                     sprite_key: key.0.clone(),
+                    ref_id: light_def.ref_id.clone(),
                     offset_x: light_def.offset_x,
                     offset_y: light_def.offset_y,
+                    offset_z: light_def.offset_z,
+                    sprite_width: {
+                        // Read actual sprite width for correct X positioning
+                        let ts_name = key.0.rsplit_once('_').map(|(n,_)| n).unwrap_or(&key.0);
+                        let qoi = format!("assets/objects/{ts_name}/{}/sprite.qoi", key.0);
+                        let png = format!("assets/objects/{ts_name}/{}/sprite.png", key.0);
+                        let path = if std::path::Path::new(&qoi).exists() { qoi } else { png };
+                        image::image_dimensions(&path).map(|(w,_)| w as f32).unwrap_or(bb_height.height)
+                    },
                 },
             ));
             light_count += 1;
@@ -898,7 +918,7 @@ fn create_tiled_uv_quad(
 ///
 /// The main render pass uses StandardMaterial's default vertex shader which
 /// does not displace vertices, so the main view still sees a flat sprite.
-fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
+pub fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
     let left = -offset_x;
     let right = w - offset_x;
     let bottom = -offset_y;
@@ -916,6 +936,52 @@ fn create_billboard_quad(w: f32, h: f32, offset_x: f32, offset_y: f32) -> Mesh {
         [1.0, 1.0],
         [1.0, 0.0],
         [0.0, 0.0],
+    ];
+    let indices = vec![0u32, 1, 2, 0, 2, 3];
+
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vertices)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(indices))
+}
+
+/// Create a billboard quad showing a single frame from a spritesheet atlas.
+/// UVs are set to the specified frame region within the full sheet.
+pub fn create_animated_billboard_quad(
+    frame_w: f32,
+    frame_h: f32,
+    sheet_w: f32,
+    sheet_h: f32,
+    frame_col: u32,
+    frame_row: u32,
+) -> Mesh {
+
+    let origin_x = frame_w * 0.5;
+    let origin_y = DEFAULT_TILE_SIZE * 0.5;
+
+    let left = -origin_x;
+    let right = frame_w - origin_x;
+    let bottom = -origin_y;
+    let top = frame_h - origin_y;
+
+    let u_min = frame_col as f32 * frame_w / sheet_w;
+    let u_max = (frame_col as f32 + 1.0) * frame_w / sheet_w;
+    let v_min = frame_row as f32 * frame_h / sheet_h;
+    let v_max = (frame_row as f32 + 1.0) * frame_h / sheet_h;
+
+    let vertices = vec![
+        [left, bottom, 0.0],
+        [right, bottom, 0.0],
+        [right, top, 0.0],
+        [left, top, 0.0],
+    ];
+    let normals = vec![[0.0, 0.0, 1.0]; 4];
+    let uvs = vec![
+        [u_min, v_max],
+        [u_max, v_max],
+        [u_max, v_min],
+        [u_min, v_min],
     ];
     let indices = vec![0u32, 1, 2, 0, 2, 3];
 
@@ -1114,28 +1180,7 @@ fn sample_slope_height(
     world_x: f32,
     world_y: f32,
 ) -> f32 {
-    let Some(hm) = slope_maps.by_level.get(&level) else { return 0.0 };
-    let tile_size = 48.0; // DEFAULT_TILE_SIZE
-
-    // Convert world position to corner-grid coordinates
-    let gx = world_x / tile_size;
-    let gy = world_y / tile_size;
-
-    let ix = (gx.floor() as usize).min(hm.width.saturating_sub(2));
-    let iy = (gy.floor() as usize).min(hm.height.saturating_sub(2));
-
-    let fx = (gx - ix as f32).clamp(0.0, 1.0);
-    let fy = (gy - iy as f32).clamp(0.0, 1.0);
-
-    // Bilinear interpolation of the 4 surrounding corners
-    let h00 = hm.get(ix, iy);
-    let h10 = hm.get(ix + 1, iy);
-    let h01 = hm.get(ix, iy + 1);
-    let h11 = hm.get(ix + 1, iy + 1);
-
-    let h_bot = h00 + (h10 - h00) * fx;
-    let h_top = h01 + (h11 - h01) * fx;
-    h_bot + (h_top - h_bot) * fy
+    crate::map::slope::sample_slope_height(slope_maps, level, world_x, world_y)
 }
 
 // ── Combat grid ────────────────────────────────────────────────────────────
@@ -1241,6 +1286,46 @@ pub fn compute_combat_grid(
         true
     };
 
+    // First, contract the initial AABB so it contains no water tiles.
+    // The grid must be rectangular, so we shrink each side inward until
+    // the entire interior is walkable.
+    min_t = min_t.max(IVec2::ZERO);
+    max_t = max_t.min(IVec2::new(map_w as i32 - 1, map_h as i32 - 1));
+
+    let has_interior_water = |min: IVec2, max: IVec2| -> bool {
+        for y in min.y..=max.y {
+            for x in min.x..=max.x {
+                if y >= 0 && y < map_h as i32 && x >= 0 && x < map_w as i32 {
+                    if !walkable[(y as u32 * map_w + x as u32) as usize] {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    };
+
+    // Shrink until the initial rectangle is clean of water
+    while has_interior_water(min_t, max_t) && min_t.x < max_t.x && min_t.y < max_t.y {
+        // Find which side to shrink — pick the side closest to water
+        let shrink_left  = !is_walkable_col(min_t.x, min_t.y, max_t.y);
+        let shrink_right = !is_walkable_col(max_t.x, min_t.y, max_t.y);
+        let shrink_bot   = !is_walkable_row(min_t.y, min_t.x, max_t.x);
+        let shrink_top   = !is_walkable_row(max_t.y, min_t.x, max_t.x);
+
+        if shrink_left       { min_t.x += 1; }
+        else if shrink_right { max_t.x -= 1; }
+        else if shrink_bot   { min_t.y += 1; }
+        else if shrink_top   { max_t.y -= 1; }
+        else {
+            // Water is in the interior but not on any edge — shrink all sides
+            min_t.x += 1;
+            max_t.x -= 1;
+            min_t.y += 1;
+            max_t.y -= 1;
+        }
+    }
+
     // Expand left
     while min_t.x > 0 && is_walkable_col(min_t.x - 1, min_t.y, max_t.y) {
         min_t.x -= 1;
@@ -1266,8 +1351,9 @@ pub fn compute_combat_grid(
     (min_t, size)
 }
 
-/// Spawn per-tile grid squares on the terrain, adjusted for slope elevation.
-/// Each square floats at the maximum corner height of its tile (never intersects slopes).
+/// Spawn the combat grid as a single mesh with vertex colors.
+/// Walkable tiles get a hollow square; tiles with colliders get a red X.
+/// Uses one draw call for the entire grid instead of 4 entities per tile.
 pub fn spawn_combat_grid(
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -1278,34 +1364,26 @@ pub fn spawn_combat_grid(
     slope_maps: &crate::map::slope::SlopeHeightMaps,
     elev_heights: &crate::map::elevation::ElevationHeights,
     slope_angle: f32,
+    blocked_tiles: &HashSet<IVec2>,
 ) {
     let tile = DEFAULT_TILE_SIZE;
     let line_thickness = 1.5;
     let base_z = elev_heights.z_by_level.get(&0).copied().unwrap_or(-1.0);
 
-    // Find the height range across the grid for normalization
-    let mut min_h = 0.0f32;
-    let mut max_h = 0.0f32;
-    if let Some(hm) = slope_maps.by_level.get(&0) {
-        for ty in 0..size.y {
-            for tx in 0..size.x {
-                let ux = (origin.x + tx as i32) as usize;
-                let uy = (origin.y + ty as i32) as usize;
-                if ux + 1 < hm.width && uy + 1 < hm.height {
-                    let h = hm.get(ux, uy).max(hm.get(ux+1, uy))
-                        .max(hm.get(ux, uy+1)).max(hm.get(ux+1, uy+1));
-                    min_h = min_h.min(h);
-                    max_h = max_h.max(h);
-                }
-            }
-        }
-    }
-    // Ensure range is at least 1 delta to avoid division by zero
-    let range = (max_h - min_h).max(1.0);
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
 
-    // Cache shared meshes
-    let h_mesh = meshes.add(Rectangle::new(tile, line_thickness));
-    let v_mesh = meshes.add(Rectangle::new(line_thickness, tile));
+    // Helper: push a quad (2 triangles) with given center, half-extents, z, color
+    let mut push_quad = |cx: f32, cy: f32, z: f32, hw: f32, hh: f32, color: [f32; 4]| {
+        let base = positions.len() as u32;
+        positions.push([cx - hw, cy - hh, z]);
+        positions.push([cx + hw, cy - hh, z]);
+        positions.push([cx + hw, cy + hh, z]);
+        positions.push([cx - hw, cy + hh, z]);
+        colors.extend_from_slice(&[color; 4]);
+        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+    };
 
     for ty in 0..size.y {
         for tx in 0..size.x {
@@ -1321,67 +1399,118 @@ pub fn spawn_combat_grid(
                 } else { 0.0 }
             } else { 0.0 };
 
-            // Map height to depth level, then to tile colors matching the tileset.
-            // Sea level = white, negative = reds/oranges, positive = greens/blues.
-            let delta = tile * slope_angle.to_radians().sin();
-            let level = if delta > 0.001 { (tile_z / delta).round() as i32 } else { 0 };
-            let color = match level {
-                i if i <= -3 => Color::srgb(220.0/255.0, 40.0/255.0, 40.0/255.0),   // -3 red
-                -2           => Color::srgb(240.0/255.0, 100.0/255.0, 30.0/255.0),   // -2 orange
-                -1           => Color::srgb(250.0/255.0, 150.0/255.0, 50.0/255.0),   // -1 yellow-orange
-                0            => Color::srgb(1.0, 1.0, 1.0),                           // sea level white
-                1            => Color::srgb(40.0/255.0, 220.0/255.0, 80.0/255.0),     // 1 green
-                2            => Color::srgb(40.0/255.0, 240.0/255.0, 140.0/255.0),    // 2 teal
-                3            => Color::srgb(40.0/255.0, 180.0/255.0, 240.0/255.0),    // 3 light blue
-                4            => Color::srgb(60.0/255.0, 120.0/255.0, 250.0/255.0),    // 4 blue
-                i if i >= 5  => Color::srgb(100.0/255.0, 60.0/255.0, 250.0/255.0),   // 5+ purple
-                _            => Color::srgb(1.0, 1.0, 1.0),
-            }.with_alpha(0.75 * alpha);
-            let mat = materials.add(StandardMaterial {
-                base_color: color,
-                unlit: true,
-                alpha_mode: AlphaMode::Blend,
-                double_sided: true,
-                cull_mode: None,
-                ..default()
-            });
-
             let z = base_z + tile_z + 0.5;
             let cx = (gx as f32 + 0.5) * tile;
             let cy = (gy as f32 + 0.5) * tile;
-            let inner = tile - line_thickness;
+            let is_blocked = blocked_tiles.contains(&IVec2::new(gx, gy));
 
-            // Hollow square: 4 edges
-            let edges: [(Handle<Mesh>, f32, f32); 4] = [
-                (h_mesh.clone(), cx, cy + inner * 0.5),
-                (h_mesh.clone(), cx, cy - inner * 0.5),
-                (v_mesh.clone(), cx - inner * 0.5, cy),
-                (v_mesh.clone(), cx + inner * 0.5, cy),
-            ];
-            for (mesh, px, py) in edges {
-                commands.spawn((
-                    Mesh3d(mesh),
-                    MeshMaterial3d(mat.clone()),
-                    Transform::from_xyz(px, py, z),
-                    CombatGridVisual,
-                ));
+            if is_blocked {
+                // Red X for blocked tiles
+                let red: [f32; 4] = [0.9, 0.15, 0.15, 0.75 * alpha];
+                let half = tile * 0.45;
+                let lt = line_thickness * 1.2;
+
+                // Diagonal lines as rotated thin quads — approximate with
+                // axis-aligned strips along each diagonal direction.
+                // We build the X from small segments for a clean look.
+                let steps = 8u32;
+                for i in 0..steps {
+                    let t0 = i as f32 / steps as f32;
+                    let t1 = (i + 1) as f32 / steps as f32;
+
+                    // Forward diagonal (\)
+                    let x0 = cx - half + (2.0 * half) * t0;
+                    let y0 = cy + half - (2.0 * half) * t0;
+                    let x1 = cx - half + (2.0 * half) * t1;
+                    let y1 = cy + half - (2.0 * half) * t1;
+                    let mx = (x0 + x1) * 0.5;
+                    let my = (y0 + y1) * 0.5;
+                    let seg_hw = ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt() * 0.5 + lt * 0.5;
+                    push_quad(mx, my, z, seg_hw, lt, red);
+
+                    // Back diagonal (/)
+                    let x0b = cx + half - (2.0 * half) * t0;
+                    let y0b = cy + half - (2.0 * half) * t0;
+                    let x1b = cx + half - (2.0 * half) * t1;
+                    let y1b = cy + half - (2.0 * half) * t1;
+                    let mxb = (x0b + x1b) * 0.5;
+                    let myb = (y0b + y1b) * 0.5;
+                    push_quad(mxb, myb, z, seg_hw, lt, red);
+                }
+            } else {
+                // Elevation-based color for walkable tiles
+                let delta = tile * slope_angle.to_radians().sin();
+                let level = if delta > 0.001 { (tile_z / delta).round() as i32 } else { 0 };
+                let Srgba { red, green, blue, .. } = match level {
+                    i if i <= -3 => Color::srgb(220.0/255.0, 40.0/255.0, 40.0/255.0),
+                    -2           => Color::srgb(240.0/255.0, 100.0/255.0, 30.0/255.0),
+                    -1           => Color::srgb(250.0/255.0, 150.0/255.0, 50.0/255.0),
+                    0            => Color::srgb(1.0, 1.0, 1.0),
+                    1            => Color::srgb(40.0/255.0, 220.0/255.0, 80.0/255.0),
+                    2            => Color::srgb(40.0/255.0, 240.0/255.0, 140.0/255.0),
+                    3            => Color::srgb(40.0/255.0, 180.0/255.0, 240.0/255.0),
+                    4            => Color::srgb(60.0/255.0, 120.0/255.0, 250.0/255.0),
+                    i if i >= 5  => Color::srgb(100.0/255.0, 60.0/255.0, 250.0/255.0),
+                    _            => Color::srgb(1.0, 1.0, 1.0),
+                }.to_srgba();
+                let color = [red, green, blue, 0.75 * alpha];
+
+                let inner = tile - line_thickness;
+                let ht = line_thickness * 0.5;
+                let hi = inner * 0.5;
+
+                // Hollow square: 4 edge quads
+                push_quad(cx, cy + hi, z, tile * 0.5, ht, color); // top
+                push_quad(cx, cy - hi, z, tile * 0.5, ht, color); // bottom
+                push_quad(cx - hi, cy, z, ht, tile * 0.5, color); // left
+                push_quad(cx + hi, cy, z, ht, tile * 0.5, color); // right
             }
         }
     }
+
+    if positions.is_empty() { return; }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+    // Flat normals pointing up — one per vertex
+    let vert_count = mesh.count_vertices();
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0, 0.0, 1.0]; vert_count]);
+    mesh.insert_indices(Indices::U32(indices));
+
+    let mat = materials.add(StandardMaterial {
+        base_color: Color::WHITE,
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        double_sided: true,
+        cull_mode: None,
+        ..default()
+    });
+
+    commands.spawn((
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(mat),
+        Transform::IDENTITY,
+        CombatGridVisual,
+    ));
 }
 
-/// Updates grid line alpha for fade-in effect after camera transition.
+/// Updates grid mesh vertex-color alpha for fade-in effect after camera transition.
 pub fn combat_grid_fade(
     combat_camera: Res<CombatCamera>,
-    grid_visuals: Query<&MeshMaterial3d<StandardMaterial>, With<CombatGridVisual>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    grid_visuals: Query<&Mesh3d, With<CombatGridVisual>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     time: Res<Time>,
     mut elapsed: Local<f32>,
+    mut done: Local<bool>,
 ) {
     if !combat_camera.active {
         *elapsed = 0.0;
+        *done = false;
         return;
     }
+
+    if *done { return; }
 
     *elapsed += time.delta_secs();
 
@@ -1390,11 +1519,19 @@ pub fn combat_grid_fade(
     let fade_duration = 0.4;
     let alpha = ((*elapsed - fade_delay) / fade_duration).clamp(0.0, 1.0);
 
-    for mat_handle in &grid_visuals {
-        if let Some(mat) = materials.get_mut(&mat_handle.0) {
-            // Preserve per-tile RGB brightness, only animate the alpha fade-in
-            let Srgba { red, green, blue, .. } = mat.base_color.to_srgba();
-            mat.base_color = Color::srgba(red, green, blue, 0.75 * alpha);
+    if alpha <= 0.0 { return; }
+    if alpha >= 1.0 { *done = true; }
+
+    for mesh_handle in &grid_visuals {
+        let Some(mesh) = meshes.get_mut(&mesh_handle.0) else { continue };
+        let Some(attr) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) else { continue };
+        let bevy::mesh::VertexAttributeValues::Float32x4(verts) = attr else { continue };
+        for c in verts.iter_mut() {
+            // The base alpha was baked as 0.75 * 0.0 initially; restore to 0.75 * alpha
+            // We stored the target alpha ratio in the RGB-relative alpha, so just scale:
+            // Original bake uses 0.75 as max alpha per vertex.
+            // We can't recover per-vertex target alpha from 0, so use a fixed 0.75.
+            c[3] = 0.75 * alpha;
         }
     }
 }

@@ -25,6 +25,10 @@ pub mod terrain_id {
     pub const MUD: u8 = 7;      // tile 6
     pub const STONE: u8 = 8;    // tile 7
     pub const SHALLOWS: u8 = 9; // tile 8
+    // Tiles 9-16 (IDs 10-17) are slope/depth tiles — see slope.rs
+    pub const BSAND: u8 = 18;   // tile 17 — black volcanic sand
+    pub const YGRASS: u8 = 19;  // tile 18 — yellow grass
+    pub const BASALT: u8 = 20;  // tile 19 — basalt stone
 }
 
 /// Name of the dedicated terrain surfaces tileset.
@@ -49,11 +53,16 @@ pub fn classify_tileset(name: &str) -> Option<u8> {
 }
 
 /// Maps a tile texture index from `terrain_surfaces` to a terrain state ID.
-/// Tile index 0 = RIVER (ID 1), tile index 1 = GRASS (ID 2), etc.
+/// Tiles 0-8 and 9-16 map directly via index+1 (terrain + slope tiles).
+/// Tiles on the second row (17+) use explicit mapping.
 fn terrain_surface_tile_to_id(texture_index: u32) -> u8 {
-    // Tile indices in terrain_surfaces.tsx are 0-based.
-    // Terrain IDs are 1-based (0 = empty).
-    (texture_index as u8).saturating_add(1)
+    match texture_index {
+        17 => terrain_id::BSAND,
+        18 => terrain_id::YGRASS,
+        19 => terrain_id::BASALT,
+        // Tiles 0-16: terrain IDs are 1-based (index + 1)
+        i => (i as u8).saturating_add(1),
+    }
 }
 
 // ── Transition types ────────────────────────────────────────────────────────
@@ -71,20 +80,55 @@ pub struct TerrainMaterial {
     #[sampler(1)]
     pub terrain_map: Handle<Image>,
 
-    /// Grass source texture for stochastic tiling.
+    /// Diffuse textures per terrain type.
     #[texture(2)]
     #[sampler(3)]
     pub grass: Handle<Image>,
 
-    /// Dirt source texture for tiling.
     #[texture(4)]
     #[sampler(5)]
     pub dirt: Handle<Image>,
 
-    /// Stone source texture for shallows.
     #[texture(6)]
     #[sampler(7)]
     pub stone: Handle<Image>,
+
+    #[texture(9)]
+    #[sampler(10)]
+    pub volcanic_sand: Handle<Image>,
+
+    #[texture(11)]
+    #[sampler(12)]
+    pub grass_alt: Handle<Image>,
+
+    #[texture(13)]
+    #[sampler(14)]
+    pub stone_alt: Handle<Image>,
+
+    /// Normal maps per terrain type (tangent-space, RGB encoded).
+    #[texture(15)]
+    #[sampler(16)]
+    pub grass_normal: Handle<Image>,
+
+    #[texture(17)]
+    #[sampler(18)]
+    pub dirt_normal: Handle<Image>,
+
+    #[texture(19)]
+    #[sampler(20)]
+    pub stone_normal: Handle<Image>,
+
+    #[texture(21)]
+    #[sampler(22)]
+    pub volcanic_sand_normal: Handle<Image>,
+
+    #[texture(23)]
+    #[sampler(24)]
+    pub grass_alt_normal: Handle<Image>,
+
+    #[texture(25)]
+    #[sampler(26)]
+    pub stone_alt_normal: Handle<Image>,
 
     #[uniform(8)]
     pub params: TerrainParams,
@@ -104,7 +148,10 @@ pub struct TerrainParams {
     pub map_size: Vec2,
     pub transition_type: u32,
     pub ledge_half_width: f32,
-    pub _pad1: Vec2,
+    pub normal_strength: f32,
+    pub sun_intensity: f32,
+    /// xyz = toward-light direction (world space), w = unused.
+    pub sun_direction: Vec4,
 }
 
 impl Default for TerrainParams {
@@ -122,7 +169,9 @@ impl Default for TerrainParams {
             map_size: Vec2::new(30.0, 20.0),
             transition_type: transition_id::ROCK_LEDGE,
             ledge_half_width: 0.25,
-            _pad1: Vec2::ZERO,
+            normal_strength: 0.6,
+            sun_intensity: 1.0,
+            sun_direction: Vec4::new(0.0, 0.0, 1.0, 0.0),
         }
     }
 }
@@ -359,15 +408,36 @@ pub fn build_terrain_and_attach_material(
         image.sampler = ImageSampler::nearest();
         let terrain_map_handle = images.add(image);
 
-        let grass_handle: Handle<Image> = asset_server.load("textures/grass.qoi");
-        let dirt_handle: Handle<Image> = asset_server.load("textures/dirt.qoi");
-        let stone_handle: Handle<Image> = asset_server.load("textures/stone.qoi");
+        // Diffuse textures
+        let grass_handle: Handle<Image> = asset_server.load("textures/grass/diffuse.qoi");
+        let dirt_handle: Handle<Image> = asset_server.load("textures/dirt/diffuse.qoi");
+        let stone_handle: Handle<Image> = asset_server.load("textures/stone/diffuse.qoi");
+        let volcanic_sand_handle: Handle<Image> = asset_server.load("textures/volcanic_sand/diffuse.qoi");
+        let grass_alt_handle: Handle<Image> = asset_server.load("textures/grass_alt/diffuse.qoi");
+        let stone_alt_handle: Handle<Image> = asset_server.load("textures/stone_alt/diffuse.qoi");
+
+        // Normal maps (tangent-space)
+        let grass_normal: Handle<Image> = asset_server.load("textures/grass/normal.qoi");
+        let dirt_normal: Handle<Image> = asset_server.load("textures/dirt/normal.qoi");
+        let stone_normal: Handle<Image> = asset_server.load("textures/stone/normal.qoi");
+        let volcanic_sand_normal: Handle<Image> = asset_server.load("textures/volcanic_sand/normal.qoi");
+        let grass_alt_normal: Handle<Image> = asset_server.load("textures/grass_alt/normal.qoi");
+        let stone_alt_normal: Handle<Image> = asset_server.load("textures/stone_alt/normal.qoi");
 
         let material = materials.add(TerrainMaterial {
             terrain_map: terrain_map_handle,
             grass: grass_handle,
             dirt: dirt_handle,
             stone: stone_handle,
+            volcanic_sand: volcanic_sand_handle,
+            grass_alt: grass_alt_handle,
+            stone_alt: stone_alt_handle,
+            grass_normal,
+            dirt_normal,
+            stone_normal,
+            volcanic_sand_normal,
+            grass_alt_normal,
+            stone_alt_normal,
             params: TerrainParams {
                 map_size: Vec2::new(w as f32, h as f32),
                 ..default()
@@ -398,5 +468,25 @@ pub fn build_terrain_and_attach_material(
         }
 
         info!("Built terrain type map ({}x{}) and attached TerrainMaterial", w, h);
+    }
+}
+
+/// Syncs the sun direction from the DirectionalLight into all TerrainMaterial
+/// instances each frame so the terrain normal map responds to sun movement.
+pub fn update_terrain_sun(
+    sun: Query<(&DirectionalLight, &Transform), With<crate::lighting::components::SunLight>>,
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+) {
+    let Ok((sun_light, sun_tf)) = sun.single() else {
+        return;
+    };
+
+    // DirectionalLight shines along -Z local; direction toward the light is +Z = back().
+    let toward_light = sun_tf.back();
+    let intensity = sun_light.illuminance / 8_000.0; // normalize against peak
+
+    for (_, mat) in materials.iter_mut() {
+        mat.params.sun_direction = Vec4::new(toward_light.x, toward_light.y, toward_light.z, 0.0);
+        mat.params.sun_intensity = intensity.clamp(0.0, 1.0);
     }
 }

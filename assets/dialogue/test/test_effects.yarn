@@ -1,0 +1,22 @@
+title: TestEffects
+---
+Guard: Welcome, traveler. Let me show you around.
+Guard: This is [color=red]red text[/color] and [color=blue]blue text[/color].
+Guard: You can also do [color=yellow]yellow[/color], [color=green]green[/color], and [color=orange]orange[/color].
+Guard: Here is some [b]bold text[/b] for emphasis.
+Guard: Watch out! [shake]The ground is shaking beneath us![/shake]
+Guard: Something [wave]wavy and mysterious[/wave] is happening...
+Guard: You can combine them: [color=red][b]bold red warning![/b][/color]
+Guard: Or even: [color=cyan][shake]shaking cyan![/shake][/color]
+Guard: This is a longer line that should wrap to multiple lines to test the continue indicator positioning below multiline text.
+Guard: This line should auto-advance in 2 seconds. #auto:2.0
+Guard: And this one auto-advances in 3 seconds. #auto
+Guard: What do you think?
+-> Looks great!
+    Guard: Great to hear!
+-> Need more work.
+    Guard: We'll keep improving.
+-> Tell me more.
+    Guard: There's plenty more to see. Come back later!
+Guard: Farewell, traveler.
+===

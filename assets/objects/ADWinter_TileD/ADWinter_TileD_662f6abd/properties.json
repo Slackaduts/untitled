@@ -1,23 +1,37 @@
 {
+  "sprite_type": "Static",
+  "movement_mode": "None",
   "lights": [
     {
+      "ref_id": "light_0",
       "offset_x": 0.5,
-      "offset_y": 0.58,
+      "offset_y": 0.31,
+      "offset_z": 0.16,
       "color": [
-        0.6,
+        0.26821023,
         1.0,
-        0.97453403
+        0.9163637
       ],
-      "intensity": 2.7,
-      "radius": 37.0,
+      "intensity": 0.1,
+      "radius": 113.0,
       "shape": "point",
       "pulse": false,
       "flicker": false
     }
   ],
+  "emitters": [
+    {
+      "ref_id": "emitter_0",
+      "offset_x": 0.5,
+      "offset_y": 0.31,
+      "offset_z": 0.02,
+      "definition_id": "blue_orb_glow",
+      "rate": 1.0,
+      "active": true
+    }
+  ],
   "blend_height": 0.0,
   "shadow_offset_x": 0.48,
   "shadow_offset_y": 0.53,
-  "keywords": [],
-  "obj_type": "structural"
+  "keywords": []
 }

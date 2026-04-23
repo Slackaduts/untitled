@@ -4,10 +4,10 @@ use rand::Rng;
 
 use std::collections::HashMap;
 
-use super::definitions::{EmissionDirection, EmissionShape, ParticleBlend, ParticleRegistry};
+use super::definitions::{EmissionDirection, EmissionShape, ParticleRegistry, EmitterLightDef};
 use super::emitter::ParticleEmitter;
 use super::particle::{LightParticle, ParticleLight};
-use super::render::{ParticleLightBudget, ParticleMeshes};
+use super::render::ParticleLightBudget;
 
 /// Shared materials for CPU-rendered emissive particles (one per def, never mutated).
 #[derive(Resource, Default)]
@@ -15,21 +15,43 @@ pub struct EmissiveParticleMaterials {
     pub by_def: HashMap<String, Handle<StandardMaterial>>,
 }
 
-// ── Hanabi effect attachment (non-emissive particles only) ────────────────────
+// ── Hanabi GPU effect attachment ──────────────────────────────────────────────
 
-/// All particles use CPU rendering: non-light particles get `unlit: false`
-/// (scene-lit), light particles get `unlit: true` (self-luminous).
-/// Hanabi is not used because it has no PBR lighting support.
+/// Attaches a hanabi `ParticleEffect` to emitters that don't have one yet.
+/// Builds an `EffectAsset` from the `ParticleDef` in the registry and inserts
+/// it as a component. Hanabi's internal systems then create the GPU pipeline.
 pub fn attach_hanabi_effects(
-    mut emitters: Query<&mut ParticleEmitter, Without<ParticleEffect>>,
+    mut commands: Commands,
+    registry: Res<ParticleRegistry>,
+    mut effects: ResMut<Assets<EffectAsset>>,
+    elev_heights: Res<crate::map::elevation::ElevationHeights>,
+    mut emitters: Query<(Entity, &mut ParticleEmitter), Without<ParticleEffect>>,
 ) {
-    for mut emitter in &mut emitters {
-        if !emitter.effect_spawned {
-            emitter.effect_spawned = true;
+    for (entity, mut emitter) in &mut emitters {
+        if emitter.effect_spawned {
+            continue;
         }
+
+        let Some(def) = registry.defs.get(&emitter.definition_id) else {
+            continue;
+        };
+
+        // Use the terrain's base Z for the kill plane so particles don't clip through ground.
+        let ground_z = elev_heights.z_by_level.get(&0).copied().unwrap_or(-1.0);
+        let asset = def.to_effect_asset(emitter.rate, emitter.max_particles, ground_z);
+        let handle = effects.add(asset);
+        // Set a deterministic seed derived from the entity so the shadow
+        // particle system can replicate the same RNG sequence.
+        let bits = entity.to_bits();
+        let seed = (bits as u32) ^ ((bits >> 32) as u32);
+        let mut effect = ParticleEffect::new(handle);
+        effect.prng_seed = Some(seed);
+        commands.entity(entity).insert(effect);
+        emitter.effect_spawned = true;
     }
 }
 
+/// Syncs the `ParticleEmitter` active state to the hanabi `EffectSpawner`.
 pub fn sync_emitter_to_hanabi(
     mut emitters: Query<(&ParticleEmitter, &mut EffectSpawner), Changed<ParticleEmitter>>,
 ) {
@@ -40,16 +62,14 @@ pub fn sync_emitter_to_hanabi(
 
 // ── CPU emissive particle spawning ───────────────────────────────────────────
 
-/// Spawns CPU-rendered emissive particles with a shared material per def.
-/// The same entity serves as both the visible sprite and the light position tracker.
+/// Spawns invisible light-tracking particles for defs with per-particle light.
+/// These have no mesh — they just mirror particle physics for the light texture upload.
+/// All visual rendering is handled by hanabi GPU.
 pub fn spawn_emissive_particles(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<ParticleRegistry>,
-    meshes: Res<ParticleMeshes>,
     mut budget: ResMut<ParticleLightBudget>,
-    mut shared_mats: ResMut<EmissiveParticleMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
     mut emitters: Query<(Entity, &mut ParticleEmitter, &GlobalTransform)>,
 ) {
     let mut rng = rand::thread_rng();
@@ -66,6 +86,12 @@ pub fn spawn_emissive_particles(
         let light_def = def.light.as_ref();
         let is_self_luminous = light_def.is_some();
 
+        // Only spawn CPU particles for light-emitting defs.
+        // Non-light particles are rendered purely by hanabi GPU.
+        if !is_self_luminous {
+            continue;
+        }
+
         emitter.light_timer.tick(time.delta());
         let to_spawn = emitter.light_timer.times_finished_this_tick() as usize;
 
@@ -75,44 +101,8 @@ pub fn spawn_emissive_particles(
 
         let emitter_pos = emitter_gtf.translation();
 
-        let color_start = LinearRgba::new(
-            def.color_start[0],
-            def.color_start[1],
-            def.color_start[2],
-            def.color_start[3],
-        );
-        let color_end = LinearRgba::new(
-            def.color_end[0],
-            def.color_end[1],
-            def.color_end[2],
-            def.color_end[3],
-        );
-
-        // Get or create shared material for this particle def (never mutated per-frame).
-        // Self-luminous (has light) → unlit: true. Scene-lit (no light) → unlit: false.
-        let mat_handle = shared_mats
-            .by_def
-            .entry(emitter.definition_id.clone())
-            .or_insert_with(|| {
-                let alpha_mode = match def.blend_mode {
-                    ParticleBlend::Additive => bevy::prelude::AlphaMode::Add,
-                    ParticleBlend::Alpha => bevy::prelude::AlphaMode::Blend,
-                };
-                materials.add(StandardMaterial {
-                    base_color: Color::linear_rgba(
-                        color_start.red,
-                        color_start.green,
-                        color_start.blue,
-                        color_start.alpha,
-                    ),
-                    unlit: is_self_luminous,
-                    alpha_mode,
-                    double_sided: true,
-                    cull_mode: None,
-                    ..default()
-                })
-            })
-            .clone();
+        let color_gradient = def.color_gradient();
+        let size_gradient = def.size_gradient();
 
         for _ in 0..to_spawn {
             if !budget.try_allocate() {
@@ -136,22 +126,18 @@ pub fn spawn_emissive_particles(
 
             let spawn_pos = emitter_pos + offset;
 
+            // Light-tracking particles are invisible — hanabi handles visuals.
+            // We only need Transform + LightParticle for the light texture upload.
             let mut entity_cmds = commands.spawn((
-                Mesh3d(meshes.quad.clone()),
-                MeshMaterial3d(mat_handle.clone()),
-                Transform::from_translation(spawn_pos)
-                    .with_scale(Vec3::splat(def.size_start)),
-                Visibility::default(),
+                Transform::from_translation(spawn_pos),
                 LightParticle {
                     age: 0.0,
                     lifetime,
                     velocity,
                     gravity: def.gravity,
                     drag: def.drag,
-                    color_start,
-                    color_end,
-                    size_start: def.size_start,
-                    size_end: def.size_end,
+                    color_stops: color_gradient.clone(),
+                    size_stops: size_gradient.clone(),
                     intensity: light_def.map_or(0.0, |l| l.intensity),
                     light_radius: light_def.map_or(0.0, |l| l.radius),
                     rotation,
@@ -173,8 +159,9 @@ pub fn spawn_emissive_particles(
 
 // ── CPU emissive particle update ─────────────────────────────────────────────
 
-/// Updates emissive particles: physics + size interpolation.
-/// No material mutation — shared material is never touched per-frame.
+/// Updates light-tracking particles: physics simulation.
+/// These particles are invisible (no mesh) — they just track position for the
+/// light texture upload. Hanabi handles all visual rendering.
 pub fn update_emissive_particles(
     time: Res<Time>,
     mut particles: Query<(&mut LightParticle, &mut Transform)>,
@@ -184,9 +171,6 @@ pub fn update_emissive_particles(
     for (mut particle, mut tf) in &mut particles {
         particle.age += dt;
 
-        let t = (particle.age / particle.lifetime).clamp(0.0, 1.0);
-        let size = lerp(particle.size_start, particle.size_end, t);
-
         // Physics.
         particle.velocity.z -= particle.gravity * dt;
         if particle.drag > 0.0 {
@@ -194,34 +178,13 @@ pub fn update_emissive_particles(
             particle.velocity *= factor;
         }
         tf.translation += particle.velocity * dt;
-        tf.scale = Vec3::splat(size);
     }
 }
 
-/// Billboard CPU particles toward the camera.
-pub fn orient_emissive_particles(
-    cameras: Query<&GlobalTransform, With<crate::camera::CombatCamera3d>>,
-    mut particles: Query<&mut Transform, With<LightParticle>>,
-) {
-    let Ok(cam_gtf) = cameras.single() else {
-        return;
-    };
-    let cam_pos = cam_gtf.translation();
+/// No-op: light-tracking particles are invisible, hanabi handles visual billboarding.
+/// Kept as a function to avoid breaking system registration.
+pub fn orient_emissive_particles() {}
 
-    for mut tf in &mut particles {
-        let dir = cam_pos - tf.translation;
-        if dir.length_squared() > 0.001 {
-            let look_rot = Transform::from_translation(tf.translation)
-                .looking_at(cam_pos, Vec3::Z)
-                .rotation;
-            tf.rotation = look_rot;
-        }
-    }
-}
-
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
 
 // ── CPU emissive particle despawn ────────────────────────────────────────────
 
@@ -297,6 +260,110 @@ fn emission_offset(shape: &EmissionShape, rng: &mut impl Rng) -> Vec3 {
             let theta = rng.gen_range(0.0..std::f32::consts::TAU);
             let r = radius + rng.gen_range(-width * 0.5..*width * 0.5);
             Vec3::new(r * theta.cos(), r * theta.sin(), 0.0)
+        }
+    }
+}
+
+// ── Emitter lights ──────────────────────────────────────────────────────────
+
+/// Marker for lights spawned from a ParticleDef's `emitter_lights` list.
+/// Stores the emitter entity so we can despawn/update when the emitter changes.
+#[derive(Component)]
+pub struct EmitterLight {
+    pub emitter_entity: Entity,
+}
+
+/// Marker indicating that emitter lights have already been spawned for this emitter.
+#[derive(Component)]
+pub struct EmitterLightsSpawned;
+
+/// Spawns persistent LightSource entities for emitters that define `emitter_lights`.
+/// Runs once per emitter (gated by `EmitterLightsSpawned` marker).
+/// Also despawns old emitter lights when re-triggered (marker removed).
+pub fn spawn_emitter_lights(
+    mut commands: Commands,
+    registry: Res<ParticleRegistry>,
+    emitters: Query<(Entity, &ParticleEmitter, &GlobalTransform), Without<EmitterLightsSpawned>>,
+    existing_lights: Query<(Entity, &EmitterLight)>,
+) {
+    for (emitter_entity, emitter, emitter_gtf) in &emitters {
+        // Despawn any existing emitter lights for this emitter (handles re-trigger on edit).
+        for (light_entity, el) in &existing_lights {
+            if el.emitter_entity == emitter_entity {
+                commands.entity(light_entity).despawn();
+            }
+        }
+
+        let Some(def) = registry.defs.get(&emitter.definition_id) else {
+            commands.entity(emitter_entity).insert(EmitterLightsSpawned);
+            continue;
+        };
+
+        commands.entity(emitter_entity).insert(EmitterLightsSpawned);
+
+        if def.emitter_lights.is_empty() {
+            continue;
+        }
+
+        let pos = emitter_gtf.translation();
+
+        for light_def in &def.emitter_lights {
+            spawn_single_emitter_light(&mut commands, emitter_entity, pos, light_def);
+        }
+    }
+}
+
+fn spawn_single_emitter_light(
+    commands: &mut Commands,
+    emitter_entity: Entity,
+    pos: Vec3,
+    light_def: &EmitterLightDef,
+) {
+    use crate::lighting::components::*;
+
+    commands.spawn((
+        Transform::from_translation(pos),
+        LightSource {
+            color: Color::linear_rgb(
+                light_def.color[0],
+                light_def.color[1],
+                light_def.color[2],
+            ),
+            base_intensity: light_def.intensity,
+            intensity: light_def.intensity,
+            inner_radius: light_def.radius * 0.3,
+            outer_radius: light_def.radius,
+            shape: LightShape::Point,
+            pulse: if light_def.pulse { Some(PulseConfig::default()) } else { None },
+            flicker: if light_def.flicker { Some(FlickerConfig::default()) } else { None },
+            anim_seed: rand::random::<f32>() * 100.0,
+            ..default()
+        },
+        EmitterLight { emitter_entity },
+    ));
+}
+
+/// Keeps emitter light positions in sync with their parent emitter.
+pub fn update_emitter_light_positions(
+    emitters: Query<&GlobalTransform, With<ParticleEmitter>>,
+    mut lights: Query<(&EmitterLight, &mut Transform)>,
+) {
+    for (el, mut tf) in &mut lights {
+        if let Ok(emitter_gtf) = emitters.get(el.emitter_entity) {
+            tf.translation = emitter_gtf.translation();
+        }
+    }
+}
+
+/// Despawn emitter lights when their parent emitter is despawned.
+pub fn cleanup_emitter_lights(
+    mut commands: Commands,
+    lights: Query<(Entity, &EmitterLight)>,
+    emitters: Query<Entity, With<ParticleEmitter>>,
+) {
+    for (light_entity, el) in &lights {
+        if emitters.get(el.emitter_entity).is_err() {
+            commands.entity(light_entity).despawn();
         }
     }
 }

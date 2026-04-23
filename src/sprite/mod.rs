@@ -8,7 +8,14 @@ use bevy::prelude::*;
 pub struct SpritePlugin;
 
 impl Plugin for SpritePlugin {
-    fn build(&self, _app: &mut App) {
-        // Sprite animation systems will be registered here
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (
+                animation::tick_animations,
+                animation::update_sprite_uvs
+                    .after(animation::tick_animations),
+            ),
+        );
     }
 }

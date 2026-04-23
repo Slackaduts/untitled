@@ -149,6 +149,51 @@ fn is_depth_tile(id: u8) -> bool {
     slope_id::depth_level(id).is_some()
 }
 
+// ── Public height sampling ────────────────────────────────────────────────
+
+/// Sample the slope height offset at a world-space position for a given elevation level.
+/// Returns 0.0 if no slope data exists for that level.
+pub fn sample_slope_height(
+    slope_maps: &SlopeHeightMaps,
+    level: u8,
+    world_x: f32,
+    world_y: f32,
+) -> f32 {
+    let Some(hm) = slope_maps.by_level.get(&level) else { return 0.0 };
+    let tile_size = super::DEFAULT_TILE_SIZE;
+
+    let gx = world_x / tile_size;
+    let gy = world_y / tile_size;
+
+    let ix = (gx.floor() as usize).min(hm.width.saturating_sub(2));
+    let iy = (gy.floor() as usize).min(hm.height.saturating_sub(2));
+
+    let fx = (gx - ix as f32).clamp(0.0, 1.0);
+    let fy = (gy - iy as f32).clamp(0.0, 1.0);
+
+    let h00 = hm.get(ix, iy);
+    let h10 = hm.get(ix + 1, iy);
+    let h01 = hm.get(ix, iy + 1);
+    let h11 = hm.get(ix + 1, iy + 1);
+
+    let h_bot = h00 + (h10 - h00) * fx;
+    let h_top = h01 + (h11 - h01) * fx;
+    h_bot + (h_top - h_bot) * fy
+}
+
+/// Compute the full ground Z at a world position (base elevation + slope offset).
+/// This is what gizmos/debug draws should use for Z placement.
+pub fn ground_z(
+    elev_heights: &crate::map::elevation::ElevationHeights,
+    slope_maps: &SlopeHeightMaps,
+    level: u8,
+    world_x: f32,
+    world_y: f32,
+) -> f32 {
+    let base = elev_heights.z_by_level.get(&level).copied().unwrap_or(-1.0);
+    base + sample_slope_height(slope_maps, level, world_x, world_y)
+}
+
 // ── Steep slope colliders ──────────────────────────────────────────────────
 
 #[derive(Component)]

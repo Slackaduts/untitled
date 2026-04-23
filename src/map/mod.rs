@@ -60,7 +60,8 @@ impl Plugin for MapPlugin {
             .init_resource::<elevation::ElevationMaterials>()
             .init_resource::<elevation::ElevationHeights>()
             .init_resource::<elevation::ElevationBounds>()
-            .init_resource::<slope::SlopeHeightMaps>();
+            .init_resource::<slope::SlopeHeightMaps>()
+            .init_resource::<loader::CurrentMap>();
 
         app.add_systems(
             Update,
@@ -84,6 +85,7 @@ impl Plugin for MapPlugin {
                     .after(elevation::setup_elevation_meshes),
                 elevation::track_elevation_viewport
                     .after(elevation::setup_elevation_meshes),
+                terrain_material::update_terrain_sun,
                 update_map_bounds,
                 update_fps_display,
             ),

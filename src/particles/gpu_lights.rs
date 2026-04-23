@@ -104,24 +104,31 @@ pub fn upload_particle_lights(
         let pos = gtf.translation();
         let col = count + 1;
 
-        // Row 0: position + radius
+        let t = (particle.age / particle.lifetime).clamp(0.0, 1.0);
+
+        // Scale radius with the size gradient so the light grows/shrinks
+        // with the visual particle.
+        let size_scale = super::definitions::sample_gradient_size(&particle.size_stops, t);
+        let radius = particle.light_radius * (size_scale / particle.size_stops.first().map_or(1.0, |s| s.size).max(0.01));
+
+        // Row 0: position + radius.
+        // XY from world position; Z near ground so lights reach billboard surfaces.
         let base0 = col * 4;
         halfs[base0]     = half::f16::from_f32(pos.x).to_bits();
         halfs[base0 + 1] = half::f16::from_f32(pos.y).to_bits();
-        halfs[base0 + 2] = half::f16::from_f32(pos.z).to_bits();
-        halfs[base0 + 3] = half::f16::from_f32(particle.light_radius).to_bits();
+        halfs[base0 + 2] = half::f16::from_f32(pos.z.min(5.0)).to_bits();
+        halfs[base0 + 3] = half::f16::from_f32(radius).to_bits();
 
-        // Row 1: color + alpha (alpha = 1.0 — light stays full brightness
-        // for the particle's entire lifetime, matching the shared material)
-        let t = (particle.age / particle.lifetime).clamp(0.0, 1.0);
-        let r = lerp(particle.color_start.red, particle.color_end.red, t);
-        let g = lerp(particle.color_start.green, particle.color_end.green, t);
-        let b = lerp(particle.color_start.blue, particle.color_end.blue, t);
+        // Row 1: color + alpha.
+        // Color follows the gradient; alpha fades with the gradient alpha
+        // so the light dies with the particle.
+        let c = super::definitions::sample_gradient_color(&particle.color_stops, t);
+        let alpha = c[3]; // gradient alpha controls light fadeout
         let base1 = w * 4 + col * 4;
-        halfs[base1]     = half::f16::from_f32(r * particle.intensity).to_bits();
-        halfs[base1 + 1] = half::f16::from_f32(g * particle.intensity).to_bits();
-        halfs[base1 + 2] = half::f16::from_f32(b * particle.intensity).to_bits();
-        halfs[base1 + 3] = half::f16::from_f32(1.0).to_bits();
+        halfs[base1]     = half::f16::from_f32(c[0] * particle.intensity).to_bits();
+        halfs[base1 + 1] = half::f16::from_f32(c[1] * particle.intensity).to_bits();
+        halfs[base1 + 2] = half::f16::from_f32(c[2] * particle.intensity).to_bits();
+        halfs[base1 + 3] = half::f16::from_f32(alpha).to_bits();
 
         count += 1;
     }
@@ -193,6 +200,3 @@ pub fn register_render_systems(app: &mut App) {
         .add_systems(Render, write_particle_texture.in_set(RenderSystems::PrepareAssets));
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}

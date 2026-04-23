@@ -12,6 +12,26 @@
 @group(3) @binding(5) var dirt_sampler: sampler;
 @group(3) @binding(6) var stone_texture: texture_2d<f32>;
 @group(3) @binding(7) var stone_sampler: sampler;
+@group(3) @binding(9) var volcanic_sand_texture: texture_2d<f32>;
+@group(3) @binding(10) var volcanic_sand_sampler: sampler;
+@group(3) @binding(11) var grass_alt_texture: texture_2d<f32>;
+@group(3) @binding(12) var grass_alt_sampler: sampler;
+@group(3) @binding(13) var stone_alt_texture: texture_2d<f32>;
+@group(3) @binding(14) var stone_alt_sampler: sampler;
+
+// Normal maps (tangent-space, RGB encoded)
+@group(3) @binding(15) var grass_normal_texture: texture_2d<f32>;
+@group(3) @binding(16) var grass_normal_sampler: sampler;
+@group(3) @binding(17) var dirt_normal_texture: texture_2d<f32>;
+@group(3) @binding(18) var dirt_normal_sampler: sampler;
+@group(3) @binding(19) var stone_normal_texture: texture_2d<f32>;
+@group(3) @binding(20) var stone_normal_sampler: sampler;
+@group(3) @binding(21) var volcanic_sand_normal_texture: texture_2d<f32>;
+@group(3) @binding(22) var volcanic_sand_normal_sampler: sampler;
+@group(3) @binding(23) var grass_alt_normal_texture: texture_2d<f32>;
+@group(3) @binding(24) var grass_alt_normal_sampler: sampler;
+@group(3) @binding(25) var stone_alt_normal_texture: texture_2d<f32>;
+@group(3) @binding(26) var stone_alt_normal_sampler: sampler;
 
 struct TerrainParams {
     // Water state
@@ -30,7 +50,10 @@ struct TerrainParams {
     // Transition
     transition_type: u32,
     ledge_half_width: f32,
-    _pad1: vec2<f32>,
+    // Normal mapping
+    normal_strength: f32,
+    sun_intensity: f32,
+    sun_direction: vec4<f32>, // xyz = toward-light direction
 };
 @group(3) @binding(8) var<uniform> params: TerrainParams;
 
@@ -47,12 +70,17 @@ const ID_LAVA:     u32 = 6u;
 const ID_MUD:      u32 = 7u;
 const ID_STONE:    u32 = 8u;
 const ID_SHALLOWS: u32 = 9u;
+// IDs 10-17 are slope/depth tiles (discarded)
+const ID_BSAND:    u32 = 18u;
+const ID_YGRASS:   u32 = 19u;
+const ID_BASALT:   u32 = 20u;
 
 // ── Transition IDs ──────────────────────────────────────────────────────────
 
 const TRANS_WATER_SHORE: u32 = 1u;
 const TRANS_GRASS_BLEND: u32 = 2u;
 const TRANS_WATER_DEPTH: u32 = 3u; // water ↔ shallows — depth fade
+const TRANS_STONE_BLEND: u32 = 4u; // stone ↔ basalt — pebble biome blend
 
 // ── Terrain map ─────────────────────────────────────────────────────────────
 
@@ -246,6 +274,27 @@ fn fill_stone(world_px: vec2<f32>) -> vec4<f32> {
     return textureSample(stone_texture, stone_sampler, uv);
 }
 
+// ── State: BSAND (black volcanic sand) ─────────────────────────────────────
+
+fn fill_bsand(world_px: vec2<f32>) -> vec4<f32> {
+    let uv = fract(world_px / 2048.0);
+    return textureSample(volcanic_sand_texture, volcanic_sand_sampler, uv);
+}
+
+// ── State: YGRASS (yellow grass) ───────────────────────────────────────────
+
+fn fill_ygrass(world_px: vec2<f32>) -> vec4<f32> {
+    let uv = fract(world_px / 894.0);
+    return textureSample(grass_alt_texture, grass_alt_sampler, uv);
+}
+
+// ── State: BASALT ──────────────────────────────────────────────────────────
+
+fn fill_basalt(world_px: vec2<f32>) -> vec4<f32> {
+    let uv = fract(world_px / 2048.0);
+    return textureSample(stone_alt_texture, stone_alt_sampler, uv);
+}
+
 // ── State: SHALLOWS ────────────────────────────────────────────────────────
 // Submerged rock/stone visible through shallow water. Vertically stacks:
 // counts the contiguous column of shallows tiles and applies a segmented
@@ -292,14 +341,58 @@ fn fill_shallows(world_px: vec2<f32>, time: f32, tc: vec2<i32>, local: vec2<f32>
     return vec4<f32>(clamp(col, vec3(0.0), vec3(1.0)), 1.0);
 }
 
+// ── Normal map sampling ─────────────────────────────────────────────────────
+// Samples the tangent-space normal for a given terrain ID at the world position.
+// Returns a normalized world-space normal (terrain lies in XY plane, Z = up).
+
+fn sample_terrain_normal(id: u32, world_px: vec2<f32>) -> vec3<f32> {
+    var n_raw: vec3<f32>;
+    switch id {
+        case 2u  /* GRASS  */ {
+            let uv = fract(world_px / 894.0);
+            n_raw = textureSample(grass_normal_texture, grass_normal_sampler, uv).rgb;
+        }
+        case 4u  /* DIRT   */ {
+            let uv = fract(world_px / 2048.0);
+            n_raw = textureSample(dirt_normal_texture, dirt_normal_sampler, uv).rgb;
+        }
+        case 8u  /* STONE  */ {
+            let uv = fract(world_px / 2048.0);
+            n_raw = textureSample(stone_normal_texture, stone_normal_sampler, uv).rgb;
+        }
+        case 18u /* BSAND  */ {
+            let uv = fract(world_px / 2048.0);
+            n_raw = textureSample(volcanic_sand_normal_texture, volcanic_sand_normal_sampler, uv).rgb;
+        }
+        case 19u /* YGRASS */ {
+            let uv = fract(world_px / 894.0);
+            n_raw = textureSample(grass_alt_normal_texture, grass_alt_normal_sampler, uv).rgb;
+        }
+        case 20u /* BASALT */ {
+            let uv = fract(world_px / 2048.0);
+            n_raw = textureSample(stone_alt_normal_texture, stone_alt_normal_sampler, uv).rgb;
+        }
+        default {
+            // Water / shallows / unimplemented — flat normal
+            return vec3(0.0, 0.0, 1.0);
+        }
+    }
+    // Decode tangent-space: [0,1] → [-1,1] for XY, keep Z positive
+    let N = vec3(n_raw.rg * 2.0 - 1.0, n_raw.b * 2.0);
+    return normalize(N);
+}
+
 // ── Fill dispatcher ─────────────────────────────────────────────────────────
 
 fn terrain_fill(id: u32, world_px: vec2<f32>, time: f32) -> vec4<f32> {
     switch id {
-        case 1u /* RIVER    */ { return fill_water(world_px, time); }
-        case 2u /* GRASS    */ { return fill_grass(world_px); }
-        case 4u /* DIRT     */ { return fill_dirt(world_px); }
-        case 9u /* SHALLOWS */ {
+        case 1u  /* RIVER    */ { return fill_water(world_px, time); }
+        case 2u  /* GRASS    */ { return fill_grass(world_px); }
+        case 4u  /* DIRT     */ { return fill_dirt(world_px); }
+        case 18u /* BSAND    */ { return fill_bsand(world_px); }
+        case 19u /* YGRASS   */ { return fill_ygrass(world_px); }
+        case 20u /* BASALT   */ { return fill_basalt(world_px); }
+        case 9u  /* SHALLOWS */ {
             // Simplified fill — used by transitions sampling neighbors
             let stone_col = fill_stone(world_px).rgb;
             let water_col = fill_water_cheap(world_px, time);
@@ -400,18 +493,18 @@ fn sdf_corner(tx: f32, ty: f32, dir: u32) -> f32 {
 
 const GRASS_BLEND_WIDTH: f32 = 0.5; // wide biome-style blend
 
-fn grass_blend(sdf: f32, world_px: vec2<f32>, base_fill: vec3<f32>, here_id: u32) -> vec4<f32> {
+fn grass_blend(sdf: f32, world_px: vec2<f32>, base_fill: vec3<f32>,
+               here_id: u32, neighbor_id: u32) -> vec4<f32> {
     // t: 0 = dirt side, 1 = grass side
     let t = clamp((GRASS_BLEND_WIDTH - sdf) / (2.0 * GRASS_BLEND_WIDTH), 0.0, 1.0);
 
-    // Sample the other terrain's texture — reuse base_fill for our side
-    var other: vec3<f32>;
+    // Sample the neighbor's fill — reuse base_fill for our side
+    let other = terrain_fill(neighbor_id, world_px, 0.0).rgb;
+    let here_is_grass = is_grass_like(here_id);
     var grass_t: f32;
-    if here_id == ID_DIRT {
-        other = fill_grass(world_px).rgb;
+    if !here_is_grass {
         grass_t = t;
     } else {
-        other = fill_dirt(world_px).rgb;
         grass_t = 1.0 - t;
     }
 
@@ -419,11 +512,69 @@ fn grass_blend(sdf: f32, world_px: vec2<f32>, base_fill: vec3<f32>, here_id: u32
     let n = value_noise(world_px / tilemap_data.tile_size.x * 6.0 + 400.0);
     let blend = smoothstep(0.35, 0.65, grass_t + (n - 0.5) * 0.5);
 
-    let dirt_col = select(base_fill, other, here_id == ID_GRASS);
-    let grass_col = select(other, base_fill, here_id == ID_GRASS);
+    let dirt_col = select(base_fill, other, here_is_grass);
+    let grass_col = select(other, base_fill, here_is_grass);
     let col = mix(dirt_col, grass_col, blend);
 
     let alpha = smoothstep(GRASS_BLEND_WIDTH, GRASS_BLEND_WIDTH * 0.2, abs(sdf));
+    return vec4<f32>(col, alpha);
+}
+
+// ── Transition: STONE_BLEND (stone ↔ basalt) ───────────────────────────────
+// Biome blend like grass, with scattered pebble highlights at the boundary.
+
+const STONE_BLEND_WIDTH: f32 = 0.45;
+
+fn stone_blend(sdf: f32, world_px: vec2<f32>, base_fill: vec3<f32>,
+               here_id: u32, neighbor_id: u32) -> vec4<f32> {
+    let t = clamp((STONE_BLEND_WIDTH - sdf) / (2.0 * STONE_BLEND_WIDTH), 0.0, 1.0);
+
+    let other = terrain_fill(neighbor_id, world_px, 0.0).rgb;
+    let here_is_basalt = (here_id == ID_BASALT);
+    var basalt_t: f32;
+    if !here_is_basalt {
+        basalt_t = t;
+    } else {
+        basalt_t = 1.0 - t;
+    }
+
+    // Coarse blend noise — same approach as grass_blend
+    let tile_sz = tilemap_data.tile_size.x;
+    let n = value_noise(world_px / tile_sz * 5.0 + 200.0);
+    let blend = smoothstep(0.3, 0.7, basalt_t + (n - 0.5) * 0.55);
+
+    let stone_col = select(base_fill, other, here_is_basalt);
+    let basalt_col = select(other, base_fill, here_is_basalt);
+    var col = mix(stone_col, basalt_col, blend);
+
+    // Pebble effect — high-frequency Voronoi-ish dots in the transition zone
+    let boundary_strength = 1.0 - smoothstep(0.0, STONE_BLEND_WIDTH * 0.7, abs(sdf));
+    if boundary_strength > 0.01 {
+        let peb_uv = world_px / tile_sz * 12.0;
+        let cell = floor(peb_uv);
+        // Check this cell and neighbors for nearest pebble center
+        var min_d = 1.0;
+        var peb_hash = 0.0;
+        for (var dy = -1; dy <= 1; dy++) {
+            for (var dx = -1; dx <= 1; dx++) {
+                let c = cell + vec2(f32(dx), f32(dy));
+                let h = hash22(c);
+                let center = c + h;
+                let d = length(peb_uv - center);
+                if d < min_d {
+                    min_d = d;
+                    peb_hash = hash21(c);
+                }
+            }
+        }
+        // Bright/dark pebble highlight where min_d is small (pebble interior)
+        let peb_r = mix(0.2, 0.35, peb_hash); // varying pebble sizes
+        let peb_t = smoothstep(peb_r, peb_r * 0.4, min_d) * boundary_strength;
+        let peb_shade = mix(-0.06, 0.08, peb_hash); // some darker, some lighter
+        col += col * peb_shade * peb_t;
+    }
+
+    let alpha = smoothstep(STONE_BLEND_WIDTH, STONE_BLEND_WIDTH * 0.2, abs(sdf));
     return vec4<f32>(col, alpha);
 }
 
@@ -431,6 +582,14 @@ fn grass_blend(sdf: f32, world_px: vec2<f32>, base_fill: vec3<f32>, here_id: u32
 
 fn is_watery(id: u32) -> bool {
     return id == ID_RIVER || id == ID_SHALLOWS;
+}
+
+fn is_grass_like(id: u32) -> bool {
+    return id == ID_GRASS || id == ID_YGRASS;
+}
+
+fn is_stone_like(id: u32) -> bool {
+    return id == ID_STONE || id == ID_BASALT;
 }
 
 fn get_transition_type(here_id: u32, neighbor_id: u32) -> u32 {
@@ -442,10 +601,14 @@ fn get_transition_type(here_id: u32, neighbor_id: u32) -> u32 {
     if is_watery(here_id) || is_watery(neighbor_id) {
         return TRANS_WATER_SHORE;
     }
-    // Dirt ↔ Grass → biome blend
-    if (here_id == ID_DIRT && neighbor_id == ID_GRASS) ||
-       (here_id == ID_GRASS && neighbor_id == ID_DIRT) {
+    // Dirt ↔ any grass-like terrain → biome blend
+    if (here_id == ID_DIRT && is_grass_like(neighbor_id)) ||
+       (is_grass_like(here_id) && neighbor_id == ID_DIRT) {
         return TRANS_GRASS_BLEND;
+    }
+    // Stone ↔ Basalt → stone biome blend
+    if is_stone_like(here_id) && is_stone_like(neighbor_id) && here_id != neighbor_id {
+        return TRANS_STONE_BLEND;
     }
     // Default: water shore
     return TRANS_WATER_SHORE;
@@ -458,6 +621,7 @@ fn get_transition_width(trans_type: u32) -> f32 {
         case 1u { return SHORE_WIDTH; }
         case 2u { return GRASS_BLEND_WIDTH; }
         case 3u { return DEPTH_WIDTH; }
+        case 4u { return STONE_BLEND_WIDTH; }
         default { return SHORE_WIDTH; }
     }
 }
@@ -486,8 +650,12 @@ fn transition_edge(
             return vec4<f32>(shore.rgb, shore.a);
         }
         case 2u /* GRASS_BLEND */ {
-            let gb = grass_blend(sdf, world_px, base_fill, here_id);
+            let gb = grass_blend(sdf, world_px, base_fill, here_id, neighbor_id);
             return vec4<f32>(gb.rgb, gb.a);
+        }
+        case 4u /* STONE_BLEND */ {
+            let sb = stone_blend(sdf, world_px, base_fill, here_id, neighbor_id);
+            return vec4<f32>(sb.rgb, sb.a);
         }
         case 3u /* WATER_DEPTH */ {
             // Smooth blend between shallows (rock under water) and deep water
@@ -523,7 +691,7 @@ fn eval_transition(here_id: u32, neighbor_id: u32, sdf: f32,
 
 fn is_wide_blend(here_id: u32, neighbor_id: u32) -> bool {
     let tt = get_transition_type(here_id, neighbor_id);
-    return tt == TRANS_GRASS_BLEND || tt == TRANS_WATER_DEPTH;
+    return tt == TRANS_GRASS_BLEND || tt == TRANS_WATER_DEPTH || tt == TRANS_STONE_BLEND;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -542,7 +710,7 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     // Single texture read gets all precomputed channels
     let sample = terrain_sample_all(tc);
     let here = u32(round(sample.r * 255.0));
-    if here == ID_EMPTY || here >= 10u { discard; } // IDs 10-17 are depth/slope tiles
+    if here == ID_EMPTY || (here >= 10u && here <= 17u) { discard; } // IDs 10-17 are depth/slope tiles
 
     // Specialized fills that need tile coords / local position
     let local = vec2(in.uv.z, 1.0 - in.uv.w); // x=left→right, y=bottom→top
@@ -559,7 +727,7 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
     // ── Early exit: precomputed bitmask tells us if any neighbors differ ──
     let mask = neighbor_bitmask(sample);
     if mask == 0u {
-        return base;
+        return apply_terrain_normal(base, here, world_px);
     }
 
     // Bit ordering: 0=N 1=S 2=E 3=W 4=NE 5=NW 6=SE 7=SW
@@ -674,10 +842,32 @@ fn fragment(in: MeshVertexOutput) -> @location(0) vec4<f32> {
 
     // ── Blend accumulated transitions over base fill ────────────────
     if accum_weight < 0.01 {
-        return base;
+        return apply_terrain_normal(base, here, world_px);
     }
 
     let blended = accum_color / accum_weight;
     let opacity = clamp(accum_weight, 0.0, 1.0);
-    return vec4<f32>(mix(base.rgb, blended, opacity), 1.0);
+    return apply_terrain_normal(vec4<f32>(mix(base.rgb, blended, opacity), 1.0), here, world_px);
+}
+
+// ── Normal-map sun modulation ──────────────────────────────────────────────
+// Compares N·L for the sampled normal vs a flat surface. Applies as a
+// multiplicative ratio so placeholder 1×1 flat normals produce zero change.
+
+fn apply_terrain_normal(col: vec4<f32>, id: u32, world_px: vec2<f32>) -> vec4<f32> {
+    let strength = params.normal_strength;
+    if strength < 0.01 { return col; }
+
+    let sun_dir = normalize(params.sun_direction.xyz);
+    let flat_ndotl = max(sun_dir.z, 0.001); // flat terrain normal is (0,0,1)
+    let N = sample_terrain_normal(id, world_px);
+    let actual_ndotl = max(dot(N, sun_dir), 0.0);
+
+    // Ratio: >1 where normal faces sun more than flat, <1 where it faces away
+    let ratio = actual_ndotl / flat_ndotl;
+    // Modulate toward the ratio by normal_strength; 0 strength = no effect
+    let modulation = mix(1.0, ratio, strength * params.sun_intensity);
+    // Clamp to avoid extreme darkening/brightening
+    let clamped = clamp(modulation, 0.65, 1.35);
+    return vec4<f32>(col.rgb * clamped, col.a);
 }

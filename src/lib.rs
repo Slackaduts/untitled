@@ -4,6 +4,7 @@ pub mod camera;
 pub mod dev_scene;
 pub mod combat;
 pub mod config;
+pub mod dialogue;
 pub mod entity;
 pub mod input;
 pub mod lighting;
@@ -13,6 +14,8 @@ pub mod save;
 pub mod scripting;
 pub mod sound;
 pub mod sprite;
+pub mod scene_builder;
+pub mod tile_editor;
 pub mod ui;
 
 use bevy::prelude::*;
@@ -21,6 +24,7 @@ use app_state::GameState;
 use camera::CameraPlugin;
 use combat::CombatPlugin;
 use config::ConfigPlugin;
+use dialogue::DialoguePlugin;
 use entity::EntityPlugin;
 use input::InputPlugin;
 use lighting::LightingPlugin;
@@ -48,9 +52,12 @@ impl Plugin for UntitledPlugin {
             .add_plugins(CombatPlugin)
             .add_plugins(SoundPlugin)
             .add_plugins(ScriptingPlugin)
+            .add_plugins(DialoguePlugin)
             .add_plugins(UiPlugin)
             .add_plugins(SavePlugin)
             .add_plugins(billboard::BillboardPropertiesPlugin)
+            .add_plugins(tile_editor::TileEditorPlugin)
+            .add_plugins(scene_builder::SceneBuilderPlugin)
             .add_plugins(crate::dev_scene::DevScenePlugin);
     }
 }

@@ -12,6 +12,7 @@ bevy_ecs_tilemap = "0.18"
 bevy_ecs_tiled = { version = "0.11", features = ["physics"] }
 bevy_egui = "0.39"
 bevy_hanabi = { version = "0.18", features = ["3d"] }
+bevy_yarnspinner = "0.8"
 mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
 avian3d = "0.6"
 serde = { version = "1", features = ["derive"] }
@@ -36,3 +37,4 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+

@@ -1,5 +1,4 @@
 pub mod battle_ui;
-pub mod dialogue_box;
 pub mod hud;
 pub mod main_menu;
 pub mod pause_menu;

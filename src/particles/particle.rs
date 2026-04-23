@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+use super::definitions::{ColorStop, SizeStop};
+
 /// A CPU-rendered emissive particle with a visual mesh.
 /// Lighting is evaluated in shaders via a GPU storage buffer (see `gpu_lights`).
 #[derive(Component)]
@@ -9,10 +11,8 @@ pub struct LightParticle {
     pub velocity: Vec3,
     pub gravity: f32,
     pub drag: f32,
-    pub color_start: LinearRgba,
-    pub color_end: LinearRgba,
-    pub size_start: f32,
-    pub size_end: f32,
+    pub color_stops: Vec<ColorStop>,
+    pub size_stops: Vec<SizeStop>,
     pub intensity: f32,
     pub light_radius: f32,
     pub rotation: f32,

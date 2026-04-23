@@ -1,0 +1,34 @@
+{
+  "lights": [
+    {
+      "offset_x": 0.5,
+      "offset_y": 0.31,
+      "offset_z": 0.68,
+      "color": [
+        0.6,
+        0.9673068,
+        1.0
+      ],
+      "intensity": 4.5,
+      "radius": 100.0,
+      "shape": "point",
+      "pulse": false,
+      "flicker": false
+    }
+  ],
+  "emitters": [
+    {
+      "offset_x": 0.5,
+      "offset_y": 0.31,
+      "offset_z": 0.32,
+      "definition_id": "blue_orb_glow",
+      "rate": 0.5,
+      "active": true
+    }
+  ],
+  "blend_height": 0.0,
+  "shadow_offset_x": 0.0,
+  "shadow_offset_y": 0.0,
+  "keywords": [],
+  "obj_type": ""
+}

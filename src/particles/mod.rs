@@ -3,6 +3,7 @@ pub mod emitter;
 pub mod gpu_lights;
 pub mod particle;
 pub mod render;
+pub mod shadow;
 pub mod systems;
 #[cfg(feature = "dev_tools")]
 pub mod editor;
@@ -22,7 +23,7 @@ impl Plugin for ParticlePlugin {
             .add_plugins(MaterialPlugin::<ParticleLitMaterial>::default())
             .init_resource::<ParticleRegistry>()
             .init_resource::<ParticleLightBudget>()
-            .init_resource::<systems::EmissiveParticleMaterials>()
+            .init_resource::<shadow::ShadowParticlePool>()
             .add_systems(
                 Startup,
                 (
@@ -34,25 +35,30 @@ impl Plugin for ParticlePlugin {
             .add_systems(
                 Update,
                 (
-                    // Hanabi path (non-emissive particles).
+                    // Hanabi GPU rendering pipeline.
                     systems::attach_hanabi_effects,
                     systems::sync_emitter_to_hanabi
                         .after(systems::attach_hanabi_effects),
                     // Cull off-screen emitters before spawning.
                     emitter::cull_particle_emitters,
-                    // CPU emissive particles (visible + light tracking).
-                    systems::spawn_emissive_particles
-                        .after(systems::attach_hanabi_effects)
-                        .after(emitter::cull_particle_emitters),
-                    systems::update_emissive_particles
-                        .after(systems::spawn_emissive_particles),
-                    systems::orient_emissive_particles
-                        .after(systems::update_emissive_particles),
-                    systems::despawn_emissive_particles
-                        .after(systems::update_emissive_particles),
-                    // GPU buffer upload — packs all particle positions for shaders.
-                    gpu_lights::upload_particle_lights
-                        .after(systems::update_emissive_particles),
+                    // Emitter-level persistent lights.
+                    systems::spawn_emitter_lights,
+                    systems::update_emitter_light_positions
+                        .after(systems::spawn_emitter_lights),
+                    systems::cleanup_emitter_lights,
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    // Shadow particles run in PostUpdate AFTER hanabi's tick_spawners,
+                    // so we can read EffectSpawner::spawn_count for exact spawn sync.
+                    shadow::spawn_shadow_particles
+                        .after(EffectSystems::TickSpawners),
+                    shadow::update_shadow_particles
+                        .after(shadow::spawn_shadow_particles),
+                    shadow::upload_shadow_particle_lights
+                        .after(shadow::update_shadow_particles),
                 ),
             );
 

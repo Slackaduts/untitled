@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "objects": [
+    {
+      "id": "3",
+      "name": null,
+      "sprite_key": "ADWinter_TileD_662f6abd",
+      "tileset": "ADWinter_TileD",
+      "tile_ids": [],
+      "grid_pos": [
+        18,
+        44
+      ],
+      "elevation": 0,
+      "properties": {
+        "sprite_type": "Static",
+        "movement_mode": "None",
+        "lights": [
+          {
+            "ref_id": "light_0",
+            "offset_x": 0.5,
+            "offset_y": 0.31,
+            "offset_z": 0.16,
+            "color": [
+              0.26821023,
+              1.0,
+              0.9163637
+            ],
+            "intensity": 0.1,
+            "radius": 113.0,
+            "shape": "point",
+            "pulse": false,
+            "flicker": false
+          }
+        ],
+        "emitters": [
+          {
+            "ref_id": "emitter_0",
+            "offset_x": 0.5,
+            "offset_y": 0.31,
+            "offset_z": 0.02,
+            "definition_id": "blue_orb_glow",
+            "rate": 1.0,
+            "active": true
+          }
+        ],
+        "blend_height": 0.0,
+        "shadow_offset_x": 0.48,
+        "shadow_offset_y": 0.53,
+        "keywords": []
+      },
+      "collision_rects": [
+        {
+          "x": 109.21126,
+          "y": 1.0649872,
+          "w": 32.883743,
+          "h": 40.316254,
+          "depth_fwd": 24.0,
+          "depth_back": 24.0
+        }
+      ],
+      "door": null
+    },
+    {
+      "id": "6",
+      "name": null,
+      "sprite_key": "TestCharacter",
+      "tileset": "TestCharacter",
+      "tile_ids": [],
+      "grid_pos": [
+        9,
+        44
+      ],
+      "elevation": 0,
+      "properties": {
+        "sprite_type": "Lpc",
+        "movement_mode": "None",
+        "lights": [
+          {
+            "ref_id": "light_0",
+            "offset_x": 0.5,
+            "offset_y": 0.61,
+            "offset_z": 0.27,
+            "color": [
+              1.0,
+              0.79909086,
+              0.6
+            ],
+            "intensity": 0.3,
+            "radius": 195.0,
+            "shape": "point",
+            "pulse": false,
+            "flicker": false
+          }
+        ],
+        "emitters": [],
+        "blend_height": 0.0,
+        "shadow_offset_x": 0.0,
+        "shadow_offset_y": 0.0,
+        "keywords": []
+      },
+      "collision_rects": [],
+      "door": null
+    }
+  ]
+}

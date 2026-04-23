@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "events": [
+    {
+      "id": "1",
+      "name": "TestGuy",
+      "trigger": "Parallel",
+      "trigger_target": "#6",
+      "actions": [
+        {
+          "action_id": "run_yarn_node_at",
+          "args": {
+            "node": "TestEffects",
+            "speaker": "#6"
+          }
+        }
+      ],
+      "enabled": true
+    }
+  ]
+}

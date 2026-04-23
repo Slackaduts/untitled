@@ -81,7 +81,7 @@ pub fn lighting_debug_ui(
             ui.heading("Time of Day");
             ui.horizontal(|ui| {
                 ui.label("Hour");
-                ui.add(egui::DragValue::new(&mut tod.hour).range(0.0..=24.0).speed(0.05));
+                ui.add(egui::DragValue::new(&mut tod.hour).range(0.0..=23.99).speed(0.05));
             });
             ui.horizontal(|ui| {
                 ui.label("Cycle speed");

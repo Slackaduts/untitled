@@ -43,8 +43,10 @@ fn spawn_dev_scene(
     asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut std_materials: ResMut<Assets<StandardMaterial>>,
+    mut current_map: ResMut<crate::map::loader::CurrentMap>,
 ) {
     // ── Tiled map ────────────────────────────────────────────────────
+    let map_path = "assets/maps/test.tmx";
     commands.spawn((
         TiledMap(asset_server.load("maps/test.tmx")),
         TiledPhysicsSettings::<crate::map::tiled_physics_3d::TiledPhysics3dBackend>::default(),
@@ -55,6 +57,7 @@ fn spawn_dev_scene(
             0.0,
         ),
     ));
+    current_map.path = Some(map_path.to_string());
 
     // ── Player (blue square with physics) ────────────────────────────
     let player_mat = std_materials.add(StandardMaterial {
@@ -163,6 +166,7 @@ fn toggle_combat_camera(
     slope_maps: Res<crate::map::slope::SlopeHeightMaps>,
     elev_heights: Res<crate::map::elevation::ElevationHeights>,
     elev_config: Res<crate::map::elevation::ElevationConfig>,
+    spatial_query: SpatialQuery,
 ) {
     if !keyboard.just_pressed(KeyCode::Space) {
         return;
@@ -222,6 +226,29 @@ fn toggle_combat_camera(
             &tile_data,
         );
 
+        // Detect which grid tiles contain colliders (trees, rocks, etc.)
+        let tile = DEFAULT_TILE_SIZE;
+        let probe = Collider::cuboid(tile * 0.4, tile * 0.4, 500.0);
+        let filter = SpatialQueryFilter::default();
+        let mut blocked_tiles = std::collections::HashSet::new();
+        for ty in 0..grid_size.y {
+            for tx in 0..grid_size.x {
+                let gx = grid_origin.x + tx as i32;
+                let gy = grid_origin.y + ty as i32;
+                let center_pos = Vec3::new(
+                    (gx as f32 + 0.5) * tile,
+                    (gy as f32 + 0.5) * tile,
+                    0.0,
+                );
+                let hits = spatial_query.shape_intersections(
+                    &probe, center_pos, Quat::IDENTITY, &filter,
+                );
+                if !hits.is_empty() {
+                    blocked_tiles.insert(IVec2::new(gx, gy));
+                }
+            }
+        }
+
         combat_camera.active = true;
         combat_camera.activate_time = 0.0;
         combat_camera.target_center = center;
@@ -235,11 +262,13 @@ fn toggle_combat_camera(
             &mut commands, &mut meshes, &mut std_materials,
             grid_origin, grid_size, 0.0,
             &slope_maps, &elev_heights, elev_config.slope_angle_deg,
+            &blocked_tiles,
         );
 
         info!(
-            "Combat camera ON — grid {}x{} at tile ({}, {})",
-            grid_size.x, grid_size.y, grid_origin.x, grid_origin.y
+            "Combat camera ON — grid {}x{} at tile ({}, {}), {} blocked",
+            grid_size.x, grid_size.y, grid_origin.x, grid_origin.y,
+            blocked_tiles.len(),
         );
     }
 }

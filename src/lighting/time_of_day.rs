@@ -33,45 +33,45 @@ pub fn advance_time_of_day(time: Res<Time>, mut tod: ResMut<TimeOfDay>) {
 }
 
 // Palette constants for day/night tinting.
-const NIGHT_COLOR: Color = Color::linear_rgb(0.08, 0.10, 0.25);
-const NIGHT_INTENSITY: f32 = 0.15;
+const NIGHT_COLOR: Color = Color::linear_rgb(0.12, 0.14, 0.35);
+const NIGHT_INTENSITY: f32 = 0.45;
 const DAWN_COLOR: Color = Color::linear_rgb(0.9, 0.55, 0.25);
-const DAY_COLOR: Color = Color::linear_rgb(1.0, 0.95, 0.80);
+const DAY_COLOR: Color = Color::linear_rgb(1.0, 1.0, 1.0);
 const DAY_INTENSITY: f32 = 1.0;
 
 /// Maps hour-of-day to ambient color and intensity via piecewise-linear curves.
-/// Night is blue moonlight (never black), daytime is warm yellow.
+/// Night is blue moonlight (never black), peak daytime is untinted white.
 pub fn compute_ambient_from_time(
     tod: Res<TimeOfDay>,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
-    let h = tod.hour;
+    let h = tod.hour.rem_euclid(24.0);
 
     let (color, intensity) = match h {
-        // Night: 21–5 — dark blue moonlight, always visible
-        h if h >= 21.0 || h < 5.0 => {
+        // Night: 22–4 — dark blue moonlight, always visible
+        h if h >= 22.0 || h < 4.0 => {
             (NIGHT_COLOR, NIGHT_INTENSITY)
         }
-        // Pre-dawn: 5–6
-        h if h < 6.0 => {
-            let t = h - 5.0;
+        // Pre-dawn: 4–5
+        h if h < 5.0 => {
+            let t = h - 4.0;
             (lerp_color(NIGHT_COLOR, DAWN_COLOR, t), lerp(NIGHT_INTENSITY, 0.35, t))
         }
-        // Dawn: 6–8
-        h if h < 8.0 => {
-            let t = (h - 6.0) / 2.0;
+        // Dawn: 5–7
+        h if h < 7.0 => {
+            let t = (h - 5.0) / 2.0;
             (lerp_color(DAWN_COLOR, DAY_COLOR, t), lerp(0.35, DAY_INTENSITY, t))
         }
-        // Day: 8–17 — warm yellow
-        h if h < 17.0 => (DAY_COLOR, DAY_INTENSITY),
-        // Dusk: 17–19
-        h if h < 19.0 => {
-            let t = (h - 17.0) / 2.0;
+        // Day: 7–19 — neutral white
+        h if h < 19.0 => (DAY_COLOR, DAY_INTENSITY),
+        // Dusk: 19–20.5
+        h if h < 20.5 => {
+            let t = (h - 19.0) / 1.5;
             (lerp_color(DAY_COLOR, DAWN_COLOR, t), lerp(DAY_INTENSITY, 0.35, t))
         }
-        // Twilight: 19–21
+        // Twilight: 20.5–22
         _ => {
-            let t = (h - 19.0) / 2.0;
+            let t = (h - 20.5) / 1.5;
             (lerp_color(DAWN_COLOR, NIGHT_COLOR, t), lerp(0.35, NIGHT_INTENSITY, t))
         }
     };
@@ -124,17 +124,17 @@ pub fn update_sun_light(
         return;
     };
 
-    let h = tod.hour;
-    let is_day = h >= 6.0 && h <= 18.0;
+    let h = tod.hour.rem_euclid(24.0);
+    let is_day = h >= 5.0 && h <= 20.0;
 
     if !is_day {
-        // Faint blue-white moonlight so nighttime is never pitch black.
-        sun_light.illuminance = 400.0;
+        // Blue-white moonlight — visible enough to navigate by.
+        sun_light.illuminance = 1200.0;
         sun_light.color = Color::linear_rgb(0.6, 0.7, 1.0);
         return;
     }
 
-    let t = (h - 6.0) / 12.0; // 0 at sunrise, 1 at sunset
+    let t = (h - 5.0) / 15.0; // 0 at sunrise (5:00), 1 at sunset (20:00)
     let elevation = (t * PI).sin(); // peaks at noon
 
     // Azimuth: sweep 60°–120° so the sun always faces into the billboard
@@ -164,12 +164,12 @@ pub fn update_sun_light(
     let dawn_dusk_fade = (elevation * 4.0).clamp(0.0, 1.0);
     sun_light.illuminance = elevation * 8_000.0 * dawn_dusk_fade;
 
-    // Color: warm golden at dawn/dusk, soft warm yellow at noon.
+    // Color: pure white at noon, warm golden at dawn/dusk only.
     let warmth = 1.0 - elevation; // 1 at horizon, 0 at noon
     sun_light.color = Color::linear_rgb(
         1.0,
-        lerp(0.92, 0.65, warmth),  // noon: slightly warm, horizon: golden
-        lerp(0.75, 0.25, warmth),   // noon: warm yellow, horizon: deep amber
+        lerp(1.0, 0.65, warmth),   // noon: white, horizon: golden
+        lerp(1.0, 0.25, warmth),    // noon: white, horizon: deep amber
     );
 }
 

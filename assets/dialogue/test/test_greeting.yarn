@@ -1,0 +1,9 @@
+title: TestGreeting
+---
+Guard: Halt! Who goes there?
+-> I'm a friend.
+    Guard: Oh, welcome then! Come on in.
+-> None of your business.
+    Guard: I'll be keeping my eye on you...
+Guard: Safe travels.
+===

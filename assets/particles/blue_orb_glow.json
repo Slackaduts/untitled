@@ -1,0 +1,56 @@
+{
+  "id": "blue_orb_glow",
+  "lifetime": [
+    1.0,
+    4.0
+  ],
+  "speed_range": [
+    0.0,
+    23.0
+  ],
+  "direction": "Sphere",
+  "gravity": 0.0,
+  "drag": 0.0,
+  "color_start": [
+    0.3143608,
+    1.0,
+    0.9196516,
+    1.0
+  ],
+  "color_end": [
+    0.55052555,
+    1.0,
+    0.9473272,
+    1.0
+  ],
+  "size_start": 4.0,
+  "size_end": 1.0,
+  "shape": "Circle",
+  "texture": null,
+  "blend_mode": "Additive",
+  "emission_shape": "Point",
+  "rotation_range": null,
+  "angular_velocity": null,
+  "light": {
+    "color": [
+      0.0,
+      1.0,
+      0.92474437
+    ],
+    "intensity": 0.1,
+    "radius": 15.0
+  },
+  "emitter_lights": [
+    {
+      "color": [
+        0.0,
+        0.8321023,
+        1.0
+      ],
+      "intensity": 0.1,
+      "radius": 120.0,
+      "pulse": false,
+      "flicker": false
+    }
+  ]
+}

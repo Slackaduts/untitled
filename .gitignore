@@ -1,6 +1,7 @@
 .*
 __*
 !.gitignore
+!.cargo/
 .direnv/*
 /target
 saves/

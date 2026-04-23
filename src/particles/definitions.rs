@@ -41,6 +41,18 @@ impl Default for EmissionShape {
     }
 }
 
+/// Shape of individual particle meshes.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum ParticleShape {
+    #[default]
+    Quad,
+    Circle,
+    Triangle,
+    Diamond,
+    Hexagon,
+    Star,
+}
+
 /// Blending mode for particle rendering.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub enum ParticleBlend {
@@ -58,6 +70,37 @@ pub struct ParticleLightDef {
     pub intensity: f32,
     #[serde(default = "default_light_radius")]
     pub radius: f32,
+}
+
+/// A persistent light attached to the emitter itself (not per-particle).
+/// Useful for constant light sources like fires, torches, etc.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmitterLightDef {
+    #[serde(default = "default_light_color")]
+    pub color: [f32; 3],
+    #[serde(default = "default_emitter_light_intensity")]
+    pub intensity: f32,
+    #[serde(default = "default_emitter_light_radius")]
+    pub radius: f32,
+    #[serde(default)]
+    pub pulse: bool,
+    #[serde(default)]
+    pub flicker: bool,
+}
+
+fn default_emitter_light_intensity() -> f32 { 2.0 }
+fn default_emitter_light_radius() -> f32 { 120.0 }
+
+impl Default for EmitterLightDef {
+    fn default() -> Self {
+        Self {
+            color: default_light_color(),
+            intensity: default_emitter_light_intensity(),
+            radius: default_emitter_light_radius(),
+            pulse: false,
+            flicker: false,
+        }
+    }
 }
 
 fn default_light_color() -> [f32; 3] {
@@ -78,6 +121,81 @@ impl Default for ParticleLightDef {
             radius: default_light_radius(),
         }
     }
+}
+
+// ── Gradient stops ──────────────────────────────────────────────────────────
+
+/// A color key in a multi-stop gradient (position 0-1 over particle lifetime).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ColorStop {
+    /// Position along the particle lifetime (0.0 = birth, 1.0 = death).
+    pub t: f32,
+    /// RGBA color at this position.
+    pub color: [f32; 4],
+}
+
+/// A size key in a multi-stop gradient (position 0-1 over particle lifetime).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SizeStop {
+    /// Position along the particle lifetime (0.0 = birth, 1.0 = death).
+    pub t: f32,
+    /// Size at this position.
+    pub size: f32,
+}
+
+/// Piecewise-linear interpolation across a sorted list of stops.
+pub fn sample_gradient_color(stops: &[ColorStop], t: f32) -> [f32; 4] {
+    if stops.is_empty() {
+        return [1.0, 1.0, 1.0, 1.0];
+    }
+    if stops.len() == 1 || t <= stops[0].t {
+        return stops[0].color;
+    }
+    if t >= stops.last().unwrap().t {
+        return stops.last().unwrap().color;
+    }
+    // Find the two surrounding stops.
+    for i in 0..stops.len() - 1 {
+        if t >= stops[i].t && t <= stops[i + 1].t {
+            let seg_t = if stops[i + 1].t > stops[i].t {
+                (t - stops[i].t) / (stops[i + 1].t - stops[i].t)
+            } else {
+                0.0
+            };
+            let a = &stops[i].color;
+            let b = &stops[i + 1].color;
+            return [
+                a[0] + (b[0] - a[0]) * seg_t,
+                a[1] + (b[1] - a[1]) * seg_t,
+                a[2] + (b[2] - a[2]) * seg_t,
+                a[3] + (b[3] - a[3]) * seg_t,
+            ];
+        }
+    }
+    stops.last().unwrap().color
+}
+
+pub fn sample_gradient_size(stops: &[SizeStop], t: f32) -> f32 {
+    if stops.is_empty() {
+        return 1.0;
+    }
+    if stops.len() == 1 || t <= stops[0].t {
+        return stops[0].size;
+    }
+    if t >= stops.last().unwrap().t {
+        return stops.last().unwrap().size;
+    }
+    for i in 0..stops.len() - 1 {
+        if t >= stops[i].t && t <= stops[i + 1].t {
+            let seg_t = if stops[i + 1].t > stops[i].t {
+                (t - stops[i].t) / (stops[i + 1].t - stops[i].t)
+            } else {
+                0.0
+            };
+            return stops[i].size + (stops[i + 1].size - stops[i].size) * seg_t;
+        }
+    }
+    stops.last().unwrap().size
 }
 
 // ── ParticleDef ──────────────────────────────────────────────────────────────
@@ -101,7 +219,16 @@ pub struct ParticleDef {
     #[serde(default)]
     pub drag: f32,
 
-    // Appearance
+    // Appearance — multi-stop gradients
+    /// Color gradient over lifetime. If empty on load, synthesized from legacy color_start/end.
+    #[serde(default)]
+    pub color_stops: Vec<ColorStop>,
+    /// Size gradient over lifetime. If empty on load, synthesized from legacy size_start/end.
+    #[serde(default)]
+    pub size_stops: Vec<SizeStop>,
+
+    // Legacy fields — kept for backward compat with old JSON files.
+    // On deserialization, if color_stops is empty these are used to populate it.
     #[serde(default = "default_color_start")]
     pub color_start: [f32; 4],
     #[serde(default = "default_color_end")]
@@ -110,6 +237,9 @@ pub struct ParticleDef {
     pub size_start: f32,
     #[serde(default = "default_size_end")]
     pub size_end: f32,
+
+    #[serde(default)]
+    pub shape: ParticleShape,
     #[serde(default)]
     pub texture: Option<String>,
     #[serde(default)]
@@ -128,6 +258,10 @@ pub struct ParticleDef {
     // Per-particle light
     #[serde(default)]
     pub light: Option<ParticleLightDef>,
+
+    // Persistent lights attached to the emitter itself
+    #[serde(default)]
+    pub emitter_lights: Vec<EmitterLightDef>,
 }
 
 fn default_lifetime() -> (f32, f32) {
@@ -149,6 +283,46 @@ fn default_size_end() -> f32 {
     1.0
 }
 
+impl ParticleDef {
+    /// Returns the color gradient, synthesizing from legacy fields if needed.
+    pub fn color_gradient(&self) -> Vec<ColorStop> {
+        if !self.color_stops.is_empty() {
+            return self.color_stops.clone();
+        }
+        vec![
+            ColorStop { t: 0.0, color: self.color_start },
+            ColorStop { t: 1.0, color: self.color_end },
+        ]
+    }
+
+    /// Returns the size gradient, synthesizing from legacy fields if needed.
+    pub fn size_gradient(&self) -> Vec<SizeStop> {
+        if !self.size_stops.is_empty() {
+            return self.size_stops.clone();
+        }
+        vec![
+            SizeStop { t: 0.0, size: self.size_start },
+            SizeStop { t: 1.0, size: self.size_end },
+        ]
+    }
+
+    /// Ensure color_stops/size_stops are populated (call after deserialization).
+    pub fn migrate_legacy_fields(&mut self) {
+        if self.color_stops.is_empty() {
+            self.color_stops = vec![
+                ColorStop { t: 0.0, color: self.color_start },
+                ColorStop { t: 1.0, color: self.color_end },
+            ];
+        }
+        if self.size_stops.is_empty() {
+            self.size_stops = vec![
+                SizeStop { t: 0.0, size: self.size_start },
+                SizeStop { t: 1.0, size: self.size_end },
+            ];
+        }
+    }
+}
+
 impl Default for ParticleDef {
     fn default() -> Self {
         Self {
@@ -158,16 +332,26 @@ impl Default for ParticleDef {
             direction: EmissionDirection::default(),
             gravity: 0.0,
             drag: 0.0,
+            color_stops: vec![
+                ColorStop { t: 0.0, color: default_color_start() },
+                ColorStop { t: 1.0, color: default_color_end() },
+            ],
+            size_stops: vec![
+                SizeStop { t: 0.0, size: default_size_start() },
+                SizeStop { t: 1.0, size: default_size_end() },
+            ],
             color_start: default_color_start(),
             color_end: default_color_end(),
             size_start: default_size_start(),
             size_end: default_size_end(),
+            shape: ParticleShape::default(),
             texture: None,
             blend_mode: ParticleBlend::default(),
             emission_shape: EmissionShape::default(),
             rotation_range: None,
             angular_velocity: None,
             light: None,
+            emitter_lights: Vec::new(),
         }
     }
 }
@@ -176,7 +360,8 @@ impl Default for ParticleDef {
 
 impl ParticleDef {
     /// Convert this definition into a hanabi `EffectAsset` for GPU rendering.
-    pub fn to_effect_asset(&self, rate: f32, max_particles: u32) -> EffectAsset {
+    /// `ground_z` is the terrain Z at the emitter — particles below this are killed.
+    pub fn to_effect_asset(&self, rate: f32, max_particles: u32, ground_z: f32) -> EffectAsset {
         let writer = ExprWriter::new();
 
         // ── Lifetime ───────────────────────────────────────────
@@ -187,71 +372,133 @@ impl ParticleDef {
         let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, lifetime);
         let init_age = SetAttributeModifier::new(Attribute::AGE, writer.lit(0.0).expr());
 
-        // ── Velocity ───────────────────────────────────────────
-        let speed_min = self.speed_range.0;
-        let speed_max = self.speed_range.1;
-        let speed = writer.lit(speed_min).uniform(writer.lit(speed_max));
-
-        let init_vel: SetAttributeModifier = match &self.direction {
-            EmissionDirection::Up => {
-                let vel = writer.lit(0.0).vec3(writer.lit(0.0), speed);
-                SetAttributeModifier::new(Attribute::VELOCITY, vel.expr())
+        // ── Emission position ─────────────────────────────────
+        // Position must be initialized BEFORE velocity (SetVelocitySphereModifier
+        // reads particle.POSITION to compute the radial direction).
+        enum PosInit {
+            Attr(SetAttributeModifier),
+            Sphere(SetPositionSphereModifier),
+            Circle(SetPositionCircleModifier),
+        }
+        let pos_init = match &self.emission_shape {
+            EmissionShape::Point => {
+                PosInit::Attr(SetAttributeModifier::new(
+                    Attribute::POSITION,
+                    writer.lit(Vec3::ZERO).expr(),
+                ))
             }
-            _ => {
-                // For Sphere, Cone, Ring — use a random sphere direction scaled by speed.
-                // (SetVelocitySphereModifier requires position to be set first,
-                //  so for Point emission we use random direction instead.)
-                let dir = writer.rand(VectorType::VEC3F) * writer.lit(2.0) - writer.lit(1.0);
-                let vel = dir.normalized() * speed;
-                SetAttributeModifier::new(Attribute::VELOCITY, vel.expr())
+            EmissionShape::Sphere { radius } => {
+                PosInit::Sphere(SetPositionSphereModifier {
+                    center: writer.lit(Vec3::ZERO).expr(),
+                    radius: writer.lit(*radius).expr(),
+                    dimension: ShapeDimension::Volume,
+                })
+            }
+            EmissionShape::Box { half_extents } => {
+                // Random position in box via expressions.
+                let he = *half_extents;
+                let x = writer.lit(-he[0]).uniform(writer.lit(he[0]));
+                let y = writer.lit(-he[1]).uniform(writer.lit(he[1]));
+                let z = writer.lit(-he[2]).uniform(writer.lit(he[2]));
+                let pos = x.vec3(y, z);
+                PosInit::Attr(SetAttributeModifier::new(Attribute::POSITION, pos.expr()))
+            }
+            EmissionShape::Ring { radius, width } => {
+                PosInit::Circle(SetPositionCircleModifier {
+                    center: writer.lit(Vec3::ZERO).expr(),
+                    axis: writer.lit(Vec3::Z).expr(),
+                    radius: writer.lit(*radius + width * 0.5).expr(),
+                    dimension: ShapeDimension::Surface,
+                })
+            }
+        };
+
+        // ── Velocity ───────────────────────────────────────────
+        let speed_expr = writer
+            .lit(self.speed_range.0)
+            .uniform(writer.lit(self.speed_range.1))
+            .expr();
+
+        enum VelInit {
+            Attr(SetAttributeModifier),
+            Sphere(SetVelocitySphereModifier),
+        }
+        // SetVelocitySphereModifier computes normalize(POSITION - center) * speed.
+        // This produces NaN when emission_shape is Point (POSITION == center == ZERO).
+        // Use random direction for Point emission instead.
+        let is_point_emission = matches!(self.emission_shape, EmissionShape::Point);
+
+        let vel_init = match &self.direction {
+            EmissionDirection::Up => {
+                let speed = writer.lit(self.speed_range.0).uniform(writer.lit(self.speed_range.1));
+                let vel = writer.lit(0.0).vec3(writer.lit(0.0), speed);
+                VelInit::Attr(SetAttributeModifier::new(Attribute::VELOCITY, vel.expr()))
+            }
+            EmissionDirection::Sphere | EmissionDirection::Ring { .. } | EmissionDirection::Cone { .. } => {
+                if is_point_emission {
+                    // Random direction * speed (avoids NaN from normalize(ZERO)).
+                    let dir = writer.rand(VectorType::VEC3F) * writer.lit(2.0) - writer.lit(1.0);
+                    let speed = writer.lit(self.speed_range.0).uniform(writer.lit(self.speed_range.1));
+                    let vel = dir.normalized() * speed;
+                    VelInit::Attr(SetAttributeModifier::new(Attribute::VELOCITY, vel.expr()))
+                } else {
+                    // Radial outward from emission shape center.
+                    VelInit::Sphere(SetVelocitySphereModifier {
+                        center: writer.lit(Vec3::ZERO).expr(),
+                        speed: speed_expr,
+                    })
+                }
             }
         };
 
         // ── Color gradient ─────────────────────────────────────
         let mut color_gradient: HanabiGradient<Vec4> = HanabiGradient::new();
-        color_gradient.add_key(
-            0.0,
-            Vec4::new(
-                self.color_start[0],
-                self.color_start[1],
-                self.color_start[2],
-                self.color_start[3],
-            ),
-        );
-        color_gradient.add_key(
-            1.0,
-            Vec4::new(
-                self.color_end[0],
-                self.color_end[1],
-                self.color_end[2],
-                self.color_end[3],
-            ),
-        );
+        for stop in &self.color_gradient() {
+            color_gradient.add_key(
+                stop.t,
+                Vec4::new(stop.color[0], stop.color[1], stop.color[2], stop.color[3]),
+            );
+        }
 
         // ── Size gradient ──────────────────────────────────────
         let mut size_gradient: HanabiGradient<Vec3> = HanabiGradient::new();
-        size_gradient.add_key(0.0, Vec3::splat(self.size_start));
-        size_gradient.add_key(1.0, Vec3::splat(self.size_end));
+        for stop in &self.size_gradient() {
+            size_gradient.add_key(stop.t, Vec3::splat(stop.size));
+        }
 
         // ── Spawner ────────────────────────────────────────────
         let spawner = SpawnerSettings::rate(rate.into());
 
         // ── Build effect ───────────────────────────────────────
-        // We need to finish the module before building the effect, so all
-        // expressions must be created before this point.
-
-        // Gravity (Z-up world, so gravity pulls -Z).
         let gravity_expr = writer.lit(Vec3::new(0.0, 0.0, -self.gravity)).expr();
         let drag_expr = writer.lit(self.drag).expr();
+
+        // Kill plane: huge AABB above ground_z. Particles that fall below terrain die.
+        let kill_center = writer.lit(Vec3::new(0.0, 0.0, ground_z + 5000.0)).expr();
+        let kill_half = writer.lit(Vec3::new(50000.0, 50000.0, 5000.0)).expr();
 
         let module = writer.finish();
 
         let mut effect = EffectAsset::new(max_particles, spawner, module)
             .with_name(&self.id)
-            .with_simulation_space(SimulationSpace::Local)
+            .with_simulation_space(SimulationSpace::Global);
+
+        // Position init (must come before velocity).
+        effect = match pos_init {
+            PosInit::Attr(m) => effect.init(m),
+            PosInit::Sphere(m) => effect.init(m),
+            PosInit::Circle(m) => effect.init(m),
+        };
+
+        effect = effect
             .init(init_lifetime)
-            .init(init_age)
-            .init(init_vel);
+            .init(init_age);
+
+        // Velocity init (after position).
+        effect = match vel_init {
+            VelInit::Attr(m) => effect.init(m),
+            VelInit::Sphere(m) => effect.init(m),
+        };
 
         // Alpha mode.
         effect = match self.blend_mode {
@@ -267,9 +514,16 @@ impl ParticleDef {
             effect = effect.update(LinearDragModifier::new(drag_expr));
         }
 
+        // Kill particles that fall below the terrain surface.
+        effect = effect.update(KillAabbModifier {
+            center: kill_center,
+            half_size: kill_half,
+            kill_inside: false, // kill particles OUTSIDE the box (below ground)
+        });
+
         // Render modifiers.
         effect = effect
-            .render(OrientModifier::new(OrientMode::FaceCameraPosition))
+            .render(OrientModifier::new(OrientMode::ParallelCameraDepthPlane))
             .render(ColorOverLifetimeModifier {
                 gradient: color_gradient,
                 blend: ColorBlendMode::Overwrite,
@@ -305,7 +559,8 @@ pub fn load_particle_defs(mut registry: ResMut<ParticleRegistry>) {
         if path.extension().is_some_and(|e| e == "json") {
             match std::fs::read_to_string(&path) {
                 Ok(contents) => match serde_json::from_str::<ParticleDef>(&contents) {
-                    Ok(def) => {
+                    Ok(mut def) => {
+                        def.migrate_legacy_fields();
                         info!("Loaded particle def: {}", def.id);
                         registry.defs.insert(def.id.clone(), def);
                     }

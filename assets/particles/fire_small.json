@@ -1,16 +1,64 @@
 {
   "id": "fire_small",
   "lifetime": [
-    0.7,
-    1.5
+    0.4,
+    0.9
   ],
   "speed_range": [
     15.0,
     160.0
   ],
   "direction": "Up",
-  "gravity": 15.0,
-  "drag": 0.36,
+  "gravity": 0.0,
+  "drag": 0.55,
+  "color_stops": [
+    {
+      "t": 0.0,
+      "color": [
+        1.0,
+        0.23839742,
+        0.099898756,
+        1.0
+      ]
+    },
+    {
+      "t": 0.5,
+      "color": [
+        0.9961914,
+        0.49793667,
+        0.062644,
+        1.0
+      ]
+    },
+    {
+      "t": 0.5,
+      "color": [
+        1.0,
+        0.76674163,
+        0.24838066,
+        1.0
+      ]
+    },
+    {
+      "t": 1.0,
+      "color": [
+        0.5499032,
+        0.5499032,
+        0.5499032,
+        0.25
+      ]
+    }
+  ],
+  "size_stops": [
+    {
+      "t": 1.0,
+      "size": 8.2
+    },
+    {
+      "t": 1.0,
+      "size": 61.0
+    }
+  ],
   "color_start": [
     1.0,
     0.23839742,
@@ -18,28 +66,50 @@
     1.0
   ],
   "color_end": [
-    0.22288862,
-    0.17675802,
-    0.08503327,
-    0.0
+    0.0,
+    1.0,
+    0.93241477,
+    1.0
   ],
   "size_start": 11.6,
   "size_end": 2.2,
+  "shape": "Quad",
   "texture": null,
   "blend_mode": "Additive",
   "emission_shape": "Point",
-  "rotation_range": [
-    0.0,
-    6.2831855
-  ],
+  "rotation_range": null,
   "angular_velocity": null,
   "light": {
     "color": [
       1.0,
-      0.60000014,
-      0.19999999
+      0.8499999,
+      0.6
     ],
-    "intensity": 0.6,
-    "radius": 85.0
-  }
+    "intensity": 1.0,
+    "radius": 10.0
+  },
+  "emitter_lights": [
+    {
+      "color": [
+        1.0,
+        0.4645049,
+        0.14437503
+      ],
+      "intensity": 2.2,
+      "radius": 70.0,
+      "pulse": true,
+      "flicker": false
+    },
+    {
+      "color": [
+        1.0,
+        0.46102256,
+        0.2633949
+      ],
+      "intensity": 0.4,
+      "radius": 187.0,
+      "pulse": false,
+      "flicker": false
+    }
+  ]
 }

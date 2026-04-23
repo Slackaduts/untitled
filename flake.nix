@@ -24,6 +24,15 @@
             clang
             mold
             gh
+
+            # Python (for tools/generate_maps.py)
+            uv
+            (pytho3n3.withPackages (ps: with ps; [
+              pillow
+              numpy
+              scipy
+              numpy
+            ]))
           ];
 
           buildInputs = with pkgs; [

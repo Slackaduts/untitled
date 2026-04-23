@@ -18,7 +18,14 @@ pub struct ParticleEditorState {
     pub selected_def: Option<String>,
     /// Working copy being edited (writes back to registry on save).
     pub editing_def: Option<ParticleDef>,
+    /// Buffer for the ID text field (persists across frames, commits on focus loss).
+    pub editing_id: String,
     pub dirty: bool,
+    /// Set alongside dirty; consumed by preview system after one rebuild cycle.
+    pub preview_needs_rebuild: bool,
+    /// Hash of the last editing_def applied to the preview. Used to detect
+    /// actual property changes vs persistent `dirty` flag.
+    pub preview_def_hash: u64,
     // Emitter placement
     pub placer_active: bool,
     pub placer_def_id: String,
@@ -37,11 +44,14 @@ impl Default for ParticleEditorState {
             open: false,
             selected_def: None,
             editing_def: None,
+            editing_id: String::new(),
             dirty: false,
+            preview_needs_rebuild: false,
+            preview_def_hash: 0,
             placer_active: false,
             placer_def_id: String::new(),
             placer_rate: 10.0,
-            placer_height: 40.0,
+            placer_height: 5.0,
             preview_emitter: None,
             dragging: None,
             hovered_emitter: None,
@@ -102,7 +112,9 @@ pub fn particle_editor_ui(
                         if ui.selectable_label(selected, id).clicked() {
                             state.selected_def = Some(id.clone());
                             state.editing_def = registry.defs.get(id).cloned();
+                            state.editing_id = id.clone();
                             state.dirty = false;
+                            state.preview_needs_rebuild = true;
                         }
                     }
                 });
@@ -120,7 +132,8 @@ pub fn particle_editor_ui(
                         ..Default::default()
                     };
                     registry.defs.insert(id.clone(), def.clone());
-                    state.selected_def = Some(id);
+                    state.selected_def = Some(id.clone());
+                    state.editing_id = id;
                     state.editing_def = Some(def);
                     state.dirty = true;
                 }
@@ -145,12 +158,12 @@ pub fn particle_editor_ui(
             if let Some(def) = state.editing_def.as_mut() {
                 ui.heading(format!("Edit: {}", def.id));
 
-                // ID (read-only display)
+                // ID — edits a persistent buffer, commits on Enter / focus loss
                 ui.horizontal(|ui| {
                     ui.label("ID:");
-                    let mut id = def.id.clone();
-                    if ui.text_edit_singleline(&mut id).changed() {
-                        def.id = id;
+                    let resp = ui.text_edit_singleline(&mut state.editing_id);
+                    if resp.lost_focus() && state.editing_id != def.id {
+                        def.id = state.editing_id.clone();
                         state.dirty = true;
                     }
                 });
@@ -236,74 +249,96 @@ pub fn particle_editor_ui(
 
                 // ── Appearance ──────────────────────────────────────
                 ui.collapsing("Appearance", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Start color");
-                        let mut rgb = [def.color_start[0], def.color_start[1], def.color_start[2]];
-                        if egui::color_picker::color_edit_button_rgb(ui, &mut rgb).changed() {
-                            def.color_start[0] = rgb[0];
-                            def.color_start[1] = rgb[1];
-                            def.color_start[2] = rgb[2];
-                            state.dirty = true;
-                        }
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut def.color_start[3])
-                                    .range(0.0..=1.0)
-                                    .speed(0.01)
-                                    .prefix("A: "),
-                            )
-                            .changed()
-                        {
-                            state.dirty = true;
-                        }
-                    });
+                    // ── Color gradient ──
+                    ui.label("Color Gradient");
+                    // Ensure we have at least 2 stops.
+                    if def.color_stops.is_empty() {
+                        def.migrate_legacy_fields();
+                    }
+                    let mut color_remove: Option<usize> = None;
+                    let color_count = def.color_stops.len();
+                    for ci in 0..color_count {
+                        let stop = &mut def.color_stops[ci];
+                        ui.push_id(format!("cstop_{ci}"), |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::DragValue::new(&mut stop.t).range(0.0..=1.0).speed(0.01).prefix("t: ")).changed() {
+                                    state.dirty = true;
+                                }
+                                let mut rgb = [stop.color[0], stop.color[1], stop.color[2]];
+                                if egui::color_picker::color_edit_button_rgb(ui, &mut rgb).changed() {
+                                    stop.color[0] = rgb[0];
+                                    stop.color[1] = rgb[1];
+                                    stop.color[2] = rgb[2];
+                                    state.dirty = true;
+                                }
+                                if ui.add(egui::DragValue::new(&mut stop.color[3]).range(0.0..=1.0).speed(0.01).prefix("A: ")).changed() {
+                                    state.dirty = true;
+                                }
+                                if color_count > 2 {
+                                    if ui.small_button("x").clicked() {
+                                        color_remove = Some(ci);
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    if let Some(ri) = color_remove {
+                        def.color_stops.remove(ri);
+                        state.dirty = true;
+                    }
+                    if ui.small_button("+ Color Stop").clicked() {
+                        def.color_stops.push(super::definitions::ColorStop {
+                            t: 0.5,
+                            color: [1.0, 1.0, 1.0, 1.0],
+                        });
+                        def.color_stops.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+                        state.dirty = true;
+                    }
+                    // Keep sorted after edits.
+                    def.color_stops.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
 
-                    ui.horizontal(|ui| {
-                        ui.label("End color  ");
-                        let mut rgb = [def.color_end[0], def.color_end[1], def.color_end[2]];
-                        if egui::color_picker::color_edit_button_rgb(ui, &mut rgb).changed() {
-                            def.color_end[0] = rgb[0];
-                            def.color_end[1] = rgb[1];
-                            def.color_end[2] = rgb[2];
-                            state.dirty = true;
-                        }
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut def.color_end[3])
-                                    .range(0.0..=1.0)
-                                    .speed(0.01)
-                                    .prefix("A: "),
-                            )
-                            .changed()
-                        {
-                            state.dirty = true;
-                        }
-                    });
+                    ui.add_space(4.0);
 
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut def.size_start)
-                                    .range(0.1..=100.0)
-                                    .speed(0.1)
-                                    .prefix("Size start: "),
-                            )
-                            .changed()
-                        {
-                            state.dirty = true;
-                        }
-                        if ui
-                            .add(
-                                egui::DragValue::new(&mut def.size_end)
-                                    .range(0.1..=100.0)
-                                    .speed(0.1)
-                                    .prefix("end: "),
-                            )
-                            .changed()
-                        {
-                            state.dirty = true;
-                        }
-                    });
+                    // ── Size gradient ──
+                    ui.label("Size Gradient");
+                    if def.size_stops.is_empty() {
+                        def.migrate_legacy_fields();
+                    }
+                    let mut size_remove: Option<usize> = None;
+                    let size_count = def.size_stops.len();
+                    for si in 0..size_count {
+                        let stop = &mut def.size_stops[si];
+                        ui.push_id(format!("sstop_{si}"), |ui| {
+                            ui.horizontal(|ui| {
+                                if ui.add(egui::DragValue::new(&mut stop.t).range(0.0..=1.0).speed(0.01).prefix("t: ")).changed() {
+                                    state.dirty = true;
+                                }
+                                if ui.add(egui::DragValue::new(&mut stop.size).range(0.1..=100.0).speed(0.1).prefix("size: ")).changed() {
+                                    state.dirty = true;
+                                }
+                                if size_count > 2 {
+                                    if ui.small_button("x").clicked() {
+                                        size_remove = Some(si);
+                                    }
+                                }
+                            });
+                        });
+                    }
+                    if let Some(ri) = size_remove {
+                        def.size_stops.remove(ri);
+                        state.dirty = true;
+                    }
+                    if ui.small_button("+ Size Stop").clicked() {
+                        def.size_stops.push(super::definitions::SizeStop {
+                            t: 0.5,
+                            size: 2.0,
+                        });
+                        def.size_stops.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+                        state.dirty = true;
+                    }
+                    def.size_stops.sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap());
+
+                    ui.add_space(4.0);
 
                     // Blend mode
                     ui.horizontal(|ui| {
@@ -330,6 +365,70 @@ pub fn particle_editor_ui(
                             1 => ParticleBlend::Alpha,
                             _ => ParticleBlend::Additive,
                         };
+                    });
+                    // Particle shape
+                    ui.horizontal(|ui| {
+                        ui.label("Shape:");
+                        use crate::particles::definitions::ParticleShape;
+                        let shape_name = |s: &ParticleShape| match s {
+                            ParticleShape::Quad => "Quad",
+                            ParticleShape::Circle => "Circle",
+                            ParticleShape::Triangle => "Triangle",
+                            ParticleShape::Diamond => "Diamond",
+                            ParticleShape::Hexagon => "Hexagon",
+                            ParticleShape::Star => "Star",
+                        };
+                        egui::ComboBox::from_id_salt("particle_shape")
+                            .width(100.0)
+                            .selected_text(shape_name(&def.shape))
+                            .show_ui(ui, |ui| {
+                                for shape in [
+                                    ParticleShape::Quad,
+                                    ParticleShape::Circle,
+                                    ParticleShape::Triangle,
+                                    ParticleShape::Diamond,
+                                    ParticleShape::Hexagon,
+                                    ParticleShape::Star,
+                                ] {
+                                    if ui.selectable_value(&mut def.shape, shape, shape_name(&shape)).changed() {
+                                        state.dirty = true;
+                                    }
+                                }
+                            });
+                    });
+
+                    // Sprite texture
+                    ui.horizontal(|ui| {
+                        ui.label("Sprite:");
+                        let selected_text = def.texture.as_deref().unwrap_or("(none — quad)");
+                        egui::ComboBox::from_id_salt("particle_sprite")
+                            .width(160.0)
+                            .selected_text(selected_text)
+                            .show_ui(ui, |ui| {
+                                // "None" option = plain quad
+                                if ui.selectable_label(def.texture.is_none(), "(none — quad)").clicked() {
+                                    def.texture = None;
+                                    state.dirty = true;
+                                }
+                                // Scan assets/particles/sprites/ for available images
+                                let sprites_dir = std::path::Path::new("assets/particles/sprites");
+                                if let Ok(entries) = std::fs::read_dir(sprites_dir) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        if let Some(ext) = path.extension() {
+                                            let ext = ext.to_string_lossy().to_lowercase();
+                                            if ext == "png" || ext == "qoi" || ext == "jpg" {
+                                                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                                                let is_selected = def.texture.as_deref() == Some(&name);
+                                                if ui.selectable_label(is_selected, &name).clicked() {
+                                                    def.texture = Some(name);
+                                                    state.dirty = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
                     });
                 });
 
@@ -456,6 +555,58 @@ pub fn particle_editor_ui(
                     }
                 });
 
+                // ── Emitter Lights (persistent) ────────────────────
+                ui.collapsing("Emitter Lights", |ui| {
+                    ui.label("Persistent lights at the emitter position.");
+
+                    let mut remove_idx: Option<usize> = None;
+                    let num = def.emitter_lights.len();
+                    for li in 0..num {
+                        let elight = &mut def.emitter_lights[li];
+                        ui.push_id(format!("eml_{li}"), |ui| {
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    if egui::color_picker::color_edit_button_rgb(ui, &mut elight.color).changed() {
+                                        state.dirty = true;
+                                        state.preview_needs_rebuild = true;
+                                    }
+                                    if ui.add(egui::DragValue::new(&mut elight.intensity).range(0.1..=10.0).speed(0.05).prefix("I: ")).changed() {
+                                        state.dirty = true;
+                                        state.preview_needs_rebuild = true;
+                                    }
+                                    if ui.add(egui::DragValue::new(&mut elight.radius).range(5.0..=500.0).speed(1.0).prefix("R: ")).changed() {
+                                        state.dirty = true;
+                                        state.preview_needs_rebuild = true;
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut elight.pulse, "Pulse").changed() {
+                                        state.dirty = true;
+                                        state.preview_needs_rebuild = true;
+                                    }
+                                    if ui.checkbox(&mut elight.flicker, "Flicker").changed() {
+                                        state.dirty = true;
+                                        state.preview_needs_rebuild = true;
+                                    }
+                                    if ui.small_button("x").on_hover_text("Remove").clicked() {
+                                        remove_idx = Some(li);
+                                    }
+                                });
+                            });
+                        });
+                    }
+                    if let Some(ri) = remove_idx {
+                        def.emitter_lights.remove(ri);
+                        state.dirty = true;
+                        state.preview_needs_rebuild = true;
+                    }
+                    if ui.button("+ Add Emitter Light").clicked() {
+                        def.emitter_lights.push(super::definitions::EmitterLightDef::default());
+                        state.dirty = true;
+                        state.preview_needs_rebuild = true;
+                    }
+                });
+
                 ui.separator();
 
                 // ── Save ───────────────────────────────────────────
@@ -576,6 +727,7 @@ pub fn place_emitter_on_click(
     cameras: Query<(&Camera, &GlobalTransform), With<CombatCamera3d>>,
     mut contexts: EguiContexts,
     mut commands: Commands,
+    billboards: Query<&Transform, With<crate::camera::combat::Billboard>>,
 ) {
     if !state.placer_active || !mouse.just_pressed(MouseButton::Left) {
         return;
@@ -598,16 +750,31 @@ pub fn place_emitter_on_click(
         return;
     };
 
-    let Ok(ray) = camera.viewport_to_world(cam_tf, cursor_pos) else {
-        return;
+    // Find the billboard closest to the cursor in screen space — this correctly
+    // handles elevated terrain regardless of parallax.
+    let mut best_bb: Option<(Vec3, f32)> = None; // (world_pos, screen_dist_sq)
+    for bb_tf in &billboards {
+        if let Ok(screen_pos) = camera.world_to_viewport(cam_tf, bb_tf.translation) {
+            let dist_sq = screen_pos.distance_squared(cursor_pos);
+            if best_bb.is_none() || dist_sq < best_bb.unwrap().1 {
+                best_bb = Some((bb_tf.translation, dist_sq));
+            }
+        }
+    }
+
+    let place_pos = if let Some((bb_pos, _)) = best_bb {
+        // Place at the billboard's XY and Z (the actual terrain surface).
+        Vec3::new(bb_pos.x, bb_pos.y, bb_pos.z + state.placer_height)
+    } else {
+        // Fallback: ray-plane intersection at Z=0.
+        let Ok(ray) = camera.viewport_to_world(cam_tf, cursor_pos) else { return };
+        let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Z)) else { return };
+        let hit = ray.get_point(dist);
+        Vec3::new(hit.x, hit.y, state.placer_height)
     };
-    let Some(distance) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Z)) else {
-        return;
-    };
-    let world_pos = ray.get_point(distance);
 
     commands.spawn((
-        Transform::from_xyz(world_pos.x, world_pos.y, state.placer_height),
+        Transform::from_xyz(place_pos.x, place_pos.y, place_pos.z),
         Visibility::default(),
         ParticleEmitter::new(state.placer_def_id.clone(), state.placer_rate),
         DebugParticleEmitter,
@@ -727,63 +894,79 @@ pub fn draw_emitter_gizmos(
 
 pub fn particle_editor_preview(
     mut commands: Commands,
-    state: Res<ParticleEditorState>,
+    mut state: ResMut<ParticleEditorState>,
     mut registry: ResMut<ParticleRegistry>,
     mut preview_emitters: Query<
-        (Entity, &mut ParticleEmitter, &mut Transform),
+        (Entity, &mut ParticleEmitter, &mut Transform, Option<&bevy_hanabi::ParticleEffect>),
         With<PreviewParticleEmitter>,
     >,
     cameras: Query<(&Camera, &GlobalTransform), With<CombatCamera3d>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    elev_heights: Res<crate::map::elevation::ElevationHeights>,
 ) {
     // If editor is closed or no definition selected, despawn preview.
     let should_preview = state.open && state.editing_def.is_some();
 
     if !should_preview {
-        for (entity, _, _) in &preview_emitters {
+        for (entity, _, _, _) in &preview_emitters {
             commands.entity(entity).despawn();
         }
         return;
     }
 
-    let def = state.editing_def.as_ref().unwrap();
+    let def = state.editing_def.as_ref().unwrap().clone();
 
-    // Write the working copy into the registry so spawn_emissive_particles can find it
-    // (live preview before the user hits Save).
+    // Write the working copy into the registry so the shadow particle spawner can find it.
     registry.defs.insert(def.id.clone(), def.clone());
 
-    // Compute preview position: bottom-right of screen projected onto the ground plane.
+    // Compute preview position at the billboard surface height.
+    let base_z = elev_heights.z_by_level.get(&0).copied().unwrap_or(-1.0);
+    let tilt_rad = crate::camera::combat::BILLBOARD_TILT_DEG.to_radians();
+    let surface_z = base_z + crate::map::DEFAULT_TILE_SIZE * 0.5 * tilt_rad.sin();
+
     let preview_pos = (|| -> Option<Vec3> {
         let window = windows.single().ok()?;
         let (camera, cam_tf) = cameras.single().ok()?;
-        // Bottom-right corner, offset inward a bit.
-        let screen_pos = Vec2::new(window.width() * 0.75, window.height() * 0.75);
+        let screen_pos = Vec2::new(window.width() * 0.85, window.height() * 0.80);
         let ray = camera.viewport_to_world(cam_tf, screen_pos).ok()?;
-        let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Z))?;
-        Some(ray.get_point(dist) + Vec3::Z * 40.0)
+        let plane_origin = Vec3::new(0.0, 0.0, surface_z);
+        let dist = ray.intersect_plane(plane_origin, InfinitePlane3d::new(Vec3::Z))?;
+        Some(ray.get_point(dist) + Vec3::Z * 50.0)
     })()
-    .unwrap_or(Vec3::new(0.0, 0.0, 50.0));
+    .unwrap_or(Vec3::new(0.0, 0.0, surface_z + 2.0));
 
-    if preview_emitters.is_empty() {
+    // Only do a full despawn/respawn when the definition ID changes or
+    // emitter lights need rebuilding (one-shot). NOT on every dirty frame —
+    // that would kill the entity before hanabi compiles the GPU effect.
+    // Detect actual property changes via a hash of the serialized def.
+    // This avoids rebuilding every frame while `dirty` is persistently true.
+    let def_hash = {
+        use std::hash::{Hash, Hasher};
+        let json = serde_json::to_string(&def).unwrap_or_default();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        json.hash(&mut hasher);
+        hasher.finish()
+    };
+    let def_changed = def_hash != state.preview_def_hash;
+    let full_rebuild = def_changed || state.preview_needs_rebuild;
+
+    if full_rebuild && !preview_emitters.is_empty() {
+        for (entity, _, _, _) in &preview_emitters {
+            commands.entity(entity).despawn();
+        }
+    }
+
+    if full_rebuild || preview_emitters.is_empty() {
         commands.spawn((
             Transform::from_translation(preview_pos),
             Visibility::default(),
             ParticleEmitter::new(def.id.clone(), 10.0),
             PreviewParticleEmitter,
         ));
+        state.preview_def_hash = def_hash;
+        state.preview_needs_rebuild = false;
     } else {
-        // Update existing preview emitter. If the definition changed (dirty),
-        // reset effect_spawned so attach_hanabi_effects rebuilds the GPU effect.
-        for (entity, mut emitter, mut tf) in &mut preview_emitters {
-            if emitter.definition_id != def.id || state.dirty {
-                emitter.definition_id = def.id.clone();
-                emitter.effect_spawned = false;
-                // Remove old hanabi effect so it gets re-created.
-                commands.entity(entity).remove::<bevy_hanabi::ParticleEffect>();
-                commands.entity(entity).remove::<bevy_hanabi::CompiledParticleEffect>();
-            }
-            emitter.active = true;
-            // Keep preview anchored to bottom-right of screen.
+        for (_entity, _emitter, mut tf, _) in &mut preview_emitters {
             tf.translation = preview_pos;
         }
     }
