@@ -9,7 +9,6 @@ pub mod terrain_material;
 pub mod tiled_physics_3d;
 
 use avian3d::prelude::*;
-use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 #[cfg(feature = "dev_tools")]
 use bevy::pbr::wireframe::WireframeConfig;
 use bevy::prelude::*;
@@ -44,8 +43,7 @@ impl Plugin for MapPlugin {
         app.add_plugins(TiledPlugin::default())
             .add_plugins(TiledPhysicsPlugin::<tiled_physics_3d::TiledPhysics3dBackend>::default())
             .add_plugins(PhysicsPlugins::default().with_length_unit(DEFAULT_TILE_SIZE))
-            .add_plugins(MaterialTilemapPlugin::<TerrainMaterial>::default())
-            .add_plugins(FrameTimeDiagnosticsPlugin::default());
+            .add_plugins(MaterialTilemapPlugin::<TerrainMaterial>::default());
 
         // PhysicsDebugPlugin registers per-frame systems that iterate every
         // physics entity even when gizmo rendering is disabled — keep it out
@@ -91,11 +89,8 @@ impl Plugin for MapPlugin {
                     .after(elevation::setup_elevation_meshes),
                 terrain_material::update_terrain_sun,
                 update_map_bounds,
-                update_fps_display,
             ),
         );
-
-        app.add_systems(Startup, spawn_fps_display);
 
         #[cfg(feature = "dev_tools")]
         app.add_systems(Startup, disable_physics_debug)
@@ -129,29 +124,6 @@ fn disable_physics_debug(mut config_store: ResMut<GizmoConfigStore>) {
     gizmo_config.depth_bias = -1.0;
 }
 
-/// Marker for the FPS text entity.
-#[derive(Component)]
-struct FpsText;
-
-/// Spawns the FPS counter at startup so it's always visible.
-fn spawn_fps_display(mut commands: Commands) {
-    commands.spawn((
-        Text::new("FPS: --"),
-        TextFont {
-            font_size: 18.0,
-            ..default()
-        },
-        TextColor(Color::srgb(1.0, 1.0, 0.0)),
-        Node {
-            position_type: PositionType::Absolute,
-            top: Val::Px(5.0),
-            left: Val::Px(5.0),
-            ..default()
-        },
-        FpsText,
-    ));
-}
-
 /// F3 toggles debug overlay: physics collider gizmos + wireframe.
 #[cfg(feature = "dev_tools")]
 fn toggle_debug_overlay(
@@ -168,41 +140,3 @@ fn toggle_debug_overlay(
     wireframe_config.global = config.enabled;
 }
 
-/// Update FPS text each frame when visible.
-/// Shows FPS, smoothed frame time, and worst-frame time. The max value
-/// reveals intermittent spikes that smoothed averages hide.
-fn update_fps_display(
-    diagnostics: Res<DiagnosticsStore>,
-    mut query: Query<&mut Text, With<FpsText>>,
-    time: Res<Time>,
-    mut worst: Local<(f32, f32)>, // (worst_ms, timer)
-) {
-    // Track raw frame time (not smoothed) to catch spikes
-    let raw_ms = time.delta_secs() * 1000.0;
-    worst.1 -= time.delta_secs();
-    if raw_ms > worst.0 {
-        worst.0 = raw_ms;
-    }
-    // Reset worst every 2 seconds so it stays relevant
-    if worst.1 <= 0.0 {
-        worst.0 = raw_ms;
-        worst.1 = 2.0;
-    }
-
-    for mut text in &mut query {
-        let fps = diagnostics
-            .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FPS)
-            .and_then(|d| d.smoothed());
-        let frame_time = diagnostics
-            .get(&bevy::diagnostic::FrameTimeDiagnosticsPlugin::FRAME_TIME)
-            .and_then(|d| d.smoothed());
-
-        match (fps, frame_time) {
-            (Some(fps), Some(ft)) => {
-                **text = format!("FPS: {fps:.0}  ({ft:.1}ms avg, {:.1}ms worst)", worst.0);
-            }
-            (Some(fps), None) => **text = format!("FPS: {fps:.0}"),
-            _ => {}
-        }
-    }
-}

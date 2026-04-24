@@ -70,7 +70,13 @@ fn main() {
         .set(AudioPlugin {
             default_spatial_scale: SpatialScale::new_2d(1.0 / 100.0),
             ..default()
-        });
+        })
+        // Strip plugins that register hundreds of no-op systems each frame.
+        .disable::<bevy::animation::AnimationPlugin>()
+        .disable::<bevy::gltf::GltfPlugin>()
+        .disable::<bevy::gilrs::GilrsPlugin>()
+        .disable::<bevy::picking::input::PointerInputPlugin>()
+        .disable::<bevy::diagnostic::DiagnosticsPlugin>();
 
     #[allow(unused_mut)]
     let mut wgpu_settings = WgpuSettings::default();
@@ -104,6 +110,29 @@ fn main() {
     // looking for Wireframe components; keep it out of release builds.
     #[cfg(feature = "dev_tools")]
     app.add_plugins(bevy::pbr::wireframe::WireframePlugin::default());
+
+    // Switch heavyweight schedules from multithreaded to single-threaded executor.
+    // The multithreaded executor spends ~2us per system dispatch on thread
+    // wake/sync — with ~1000 systems that's ~2ms/frame of pure overhead.
+    // For a lightweight game where no systems actually benefit from parallelism,
+    // single-threaded eliminates this entirely.
+    use bevy::ecs::schedule::ExecutorKind;
+    let set_single_threaded = |schedule: &mut Schedule| {
+        schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+    };
+    app.edit_schedule(Update, set_single_threaded);
+    app.edit_schedule(PostUpdate, set_single_threaded);
+    app.edit_schedule(PreUpdate, set_single_threaded);
+    app.edit_schedule(FixedPreUpdate, set_single_threaded);
+    app.edit_schedule(FixedUpdate, set_single_threaded);
+    app.edit_schedule(FixedPostUpdate, set_single_threaded);
+    app.edit_schedule(Last, set_single_threaded);
+
+    // The Render schedule lives in the RenderApp sub-app.
+    if let Some(render_app) = app.get_sub_app_mut(bevy::render::RenderApp) {
+        render_app.edit_schedule(bevy::render::Render, set_single_threaded);
+        render_app.edit_schedule(bevy::render::ExtractSchedule, set_single_threaded);
+    }
 
     app.add_plugins(UntitledPlugin)
         .add_systems(Update, toggle_fullscreen);

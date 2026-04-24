@@ -6,6 +6,7 @@ pub mod combat;
 pub mod config;
 pub mod dialogue;
 pub mod entity;
+pub mod fps_overlay;
 pub mod input;
 pub mod lighting;
 pub mod map;
@@ -58,6 +59,7 @@ impl Plugin for UntitledPlugin {
             .add_plugins(billboard::BillboardPropertiesPlugin)
             .add_plugins(tile_editor::TileEditorPlugin)
             .add_plugins(scene_builder::SceneBuilderPlugin)
-            .add_plugins(crate::dev_scene::DevScenePlugin);
+            .add_plugins(crate::dev_scene::DevScenePlugin)
+            .add_plugins(fps_overlay::FpsOverlayPlugin);
     }
 }

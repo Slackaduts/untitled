@@ -13,7 +13,7 @@
       let
         overlays = [ (import rust-overlay) ];
         pkgs = import nixpkgs { inherit system overlays; };
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+        rustToolchain = pkgs.rust-bin.stable."1.94.1".default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
         };
         isLinux = pkgs.stdenv.isLinux;

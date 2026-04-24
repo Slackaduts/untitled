@@ -4,8 +4,6 @@ pub mod follow;
 pub mod visible_rect;
 
 use bevy::audio::SpatialListener;
-#[cfg(not(target_os = "macos"))]
-use bevy::anti_alias::smaa::{Smaa, SmaaPreset};
 use bevy::prelude::*;
 use bevy::light::ShadowFilteringMethod;
 use crate::app_state::GameState;
@@ -50,7 +48,11 @@ fn spawn_camera(mut commands: Commands) {
     // During overworld it looks straight down at z=0 (XY plane) — looks like 2D.
     // During combat it tilts for 2.5D effect.
     let mut cam = commands.spawn((
-        Camera3d::default(),
+        Camera3d {
+            // No transmissive materials in the scene — skip the transmissive pass.
+            screen_space_specular_transmission_steps: 0,
+            ..default()
+        },
         Camera {
             order: 0,
             ..default()
@@ -71,13 +73,7 @@ fn spawn_camera(mut commands: Commands) {
         ShadowFilteringMethod::Gaussian,
     ));
 
-    // Apple Silicon's tiled GPU does MSAA cheaply, while SMAA forces
-    // a full framebuffer resolve that breaks tile-local rendering.
-    // 2x is sufficient — 4x doubles bandwidth with minimal visual benefit.
-    #[cfg(target_os = "macos")]
+    // MSAA 2x: hardware-native on all platforms, near-zero cost.
+    // 4x doubles bandwidth with minimal visual benefit.
     cam.insert(Msaa::Sample2);
-
-    // SMAA is cheaper than MSAA on discrete GPUs (Windows/Linux).
-    #[cfg(not(target_os = "macos"))]
-    cam.insert((Msaa::Off, Smaa { preset: SmaaPreset::Low }));
 }
