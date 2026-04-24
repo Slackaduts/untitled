@@ -9,7 +9,7 @@
 //! is bright and full-size; unselected are dimmer and smaller.
 
 use bevy::prelude::*;
-use bevy::text::{Justify, LineBreak, TextLayout, TextLayoutInfo};
+use bevy::text::{FontWeight, Justify, LineBreak, TextLayout, TextLayoutInfo};
 use bevy_yarnspinner::prelude::*;
 use bevy_yarnspinner::events::{PresentLine, PresentOptions, DialogueCompleted};
 
@@ -228,6 +228,7 @@ fn spawn_speech_bubble(commands: &mut Commands, state: &DialogueState, font: &Ha
             left: Val::Px(0.0),
             top: Val::Px(0.0),
             max_width: Val::Px(320.0),
+            min_height: Val::Px(20.0), // Prevent collapse between lines
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(2.0),
             ..default()
@@ -334,7 +335,11 @@ pub fn on_present_line(
     let segments = parse_markup_segments(line);
 
     if let Ok(mut text) = speaker_q.single_mut() {
-        **text = speaker.clone();
+        // Only update if changed — avoids triggering a text re-layout that
+        // causes sub-pixel rounding jitter in the nametab position.
+        if text.as_str() != speaker {
+            **text = speaker.clone();
+        }
     }
     if let Ok(mut vis) = name_tab_vis.single_mut() {
         *vis = if speaker.is_empty() { Visibility::Hidden } else { Visibility::Visible };
@@ -352,7 +357,7 @@ pub fn on_present_line(
         commands.entity(body_entity).remove::<EffectGlyphsSpawned>();
 
         // Root text is empty — all content goes in TextSpan children
-        **text = " ".to_string();
+        **text = String::new();
         *tw = TypewriterState::new_styled(segments);
         tw.auto_advance = auto_advance;
 
@@ -395,6 +400,7 @@ pub fn on_present_line(
                 TextFont {
                     font: if seg.bold { bold_font.clone() } else { font.clone() },
                     font_size: 14.0,
+                    weight: if seg.bold { FontWeight::EXTRA_BOLD } else { FontWeight::default() },
                     ..default()
                 },
                 TextColor(span_color),
@@ -566,13 +572,13 @@ pub fn on_present_options(
             let is_selected = i == 0;
             let color = if is_selected { CHOICE_SELECTED } else { CHOICE_UNSELECTED };
             let font_size = if is_selected { CHOICE_FONT_SELECTED } else { CHOICE_FONT_UNSELECTED };
-            let prefix = if is_selected { "\u{25B6} " } else { "  " };
 
             let shadow = if is_selected { glow_shadow() } else { dim_shadow() };
             let base_alpha = if is_selected { 1.0 } else { CHOICE_UNSELECTED.alpha() };
             parent.spawn((
                 DialogueChoiceButton(i),
-                Text::new(format!("{prefix}{text}")),
+                ChoiceButtonStyle { target_font_size: font_size, target_color: color },
+                Text::new(text),
                 TextFont { font: dialogue_font.regular.clone(), font_size, ..default() },
                 TextColor(color),
                 TextLayout::new(Justify::Center, LineBreak::NoWrap),
@@ -727,7 +733,7 @@ pub fn handle_dialogue_input(
     mut body_q: Query<(&mut Text, &mut TypewriterState), With<DialogueBodyText>>,
     // NOTE: fading_out check is below
     mut choice_sel: Option<ResMut<ChoiceSelection>>,
-    mut choice_buttons: Query<(&DialogueChoiceButton, &mut Text, &mut TextFont, &mut TextColor, &mut TextShadow, &mut BaseAlpha), Without<DialogueBodyText>>,
+    mut choice_buttons: Query<(&DialogueChoiceButton, &mut Text, &mut TextColor, &mut TextShadow, &mut BaseAlpha, &mut ChoiceButtonStyle), Without<DialogueBodyText>>,
 ) {
     let Some(state) = dialogue_state else { return };
     if state.fading_out { return; }
@@ -747,21 +753,18 @@ pub fn handle_dialogue_input(
 
             if up || down {
                 sel.update_target();
-                // Immediately update selected/unselected styling
-                for (btn, mut text, mut font, mut color, mut shadow, mut base) in choice_buttons.iter_mut() {
-                    let body = text.as_str()
-                        .trim_start_matches("\u{25B6} ")
-                        .trim_start_matches("  ")
-                        .to_string();
+                // Set target styling — font size is lerped smoothly
+                // in animate_choice_selection.
+                for (btn, _text, mut color, mut shadow, mut base, mut style) in choice_buttons.iter_mut() {
                     if btn.0 == sel.index {
-                        **text = format!("\u{25B6} {body}");
-                        font.font_size = CHOICE_FONT_SELECTED;
+                        style.target_font_size = CHOICE_FONT_SELECTED;
+                        style.target_color = CHOICE_SELECTED;
                         *color = TextColor(CHOICE_SELECTED);
                         *shadow = glow_shadow();
                         base.0 = 1.0;
                     } else {
-                        **text = format!("  {body}");
-                        font.font_size = CHOICE_FONT_UNSELECTED;
+                        style.target_font_size = CHOICE_FONT_UNSELECTED;
+                        style.target_color = CHOICE_UNSELECTED;
                         *color = TextColor(CHOICE_UNSELECTED);
                         *shadow = dim_shadow();
                         base.0 = CHOICE_UNSELECTED.alpha();
@@ -850,6 +853,8 @@ pub fn animate_chosen_expansion(
         .unwrap_or(1.0);
 
     // Scale: 1.0 at full opacity → 2.0 at zero opacity
+    // The choice list stays centered because update_choice_position
+    // recomputes left from cached center_x and current width each frame.
     let scale = 1.0 + (1.0 - fade_progress);
 
     for (btn, mut font) in choice_buttons.iter_mut() {
@@ -1087,25 +1092,34 @@ pub fn animate_choice_selection(
     time: Res<Time>,
     mut sel: ResMut<ChoiceSelection>,
     choice_list_q: Query<&Children, With<DialogueChoiceList>>,
-    mut choice_nodes: Query<&mut Node, With<DialogueChoiceButton>>,
+    mut choice_nodes: Query<(&mut Node, &mut TextFont, &ChoiceButtonStyle), With<DialogueChoiceButton>>,
 ) {
     let dt = time.delta_secs();
+    let t = (ChoiceSelection::LERP_SPEED * dt).min(1.0);
+
     let diff = sel.target_offset - sel.scroll_offset;
     if diff.abs() < 0.3 {
         sel.scroll_offset = sel.target_offset;
     } else {
-        sel.scroll_offset += diff * (ChoiceSelection::LERP_SPEED * dt).min(1.0);
+        sel.scroll_offset += diff * t;
     }
 
     // Apply scroll offset as margin-top on the first choice button only.
     // The rest of the items follow naturally in the flex column.
     let Ok(children) = choice_list_q.single() else { return };
     for (i, child) in children.iter().enumerate() {
-        if let Ok(mut node) = choice_nodes.get_mut(child) {
+        if let Ok((mut node, mut font, style)) = choice_nodes.get_mut(child) {
             if i == 0 {
                 node.margin.top = Val::Px(sel.scroll_offset);
             } else {
                 node.margin.top = Val::Px(0.0);
+            }
+            // Smoothly lerp font size toward target
+            let size_diff = style.target_font_size - font.font_size;
+            if size_diff.abs() < 0.1 {
+                font.font_size = style.target_font_size;
+            } else {
+                font.font_size += size_diff * t;
             }
         }
     }
@@ -1272,6 +1286,7 @@ fn find_best_position(
 /// System: repositions speech bubble entities (main bubble + name tab) near
 /// the speaker entity, avoiding the player-to-speaker exclusion zone when possible.
 pub fn update_speech_bubble_position(
+    time: Res<Time>,
     mut main_q: Query<
         (&SpeechBubbleAnchor, &mut Node, &ComputedNode, &mut DialogueFade),
         (With<DialogueBoxRoot>, Without<DialogueNameTab>, Without<DialogueChoiceList>, Without<DialogueContinueIndicator>),
@@ -1294,6 +1309,7 @@ pub fn update_speech_bubble_position(
 
     let player_ent = player_q.single().ok();
 
+    let dt = time.delta_secs();
     for (anchor, mut node, computed, mut fade) in main_q.iter_mut() {
         let Some(speaker_ent) = resolve_placed_object(&anchor.instance_name, &placed_q) else { continue };
         let Some(speaker_rect) = entity_screen_rect(speaker_ent, &transform_q, &billboard_q, camera, cam_tf) else { continue };
@@ -1301,8 +1317,20 @@ pub fn update_speech_bubble_position(
         // Skip positioning until layout has computed a valid size.
         // The entity is invisible during fade-in so this is imperceptible.
         let ui_w = computed.size().x;
-        let ui_h = computed.size().y;
-        if ui_w < 1.0 || ui_h < 1.0 { continue; }
+        let ui_h_raw = computed.size().y;
+        if ui_w < 1.0 || ui_h_raw < 1.0 { continue; }
+
+        // Smooth the height to prevent abrupt vertical jumps when text changes
+        // between dialogue lines. Width snaps for responsive camera tracking.
+        let ui_h = if let Some(prev_h) = fade.smoothed_height {
+            let t = (20.0 * dt).min(1.0);
+            let h = prev_h + (ui_h_raw - prev_h) * t;
+            fade.smoothed_height = Some(h);
+            h
+        } else {
+            fade.smoothed_height = Some(ui_h_raw);
+            ui_h_raw
+        };
 
         let exclusion = build_exclusion_zone(
             player_ent.unwrap_or(speaker_ent),
@@ -1317,7 +1345,7 @@ pub fn update_speech_bubble_position(
         );
 
         // Snap directly — no lerp. The fade-in provides visual softness.
-        // Lerping causes the bubble to lag behind camera movement.
+        // Height smoothing above handles the vertical jump issue.
         node.left = Val::Px(left);
         node.top = Val::Px(top);
         fade.current_pos = Some((left, top));
@@ -1362,11 +1390,14 @@ pub fn update_choice_position(
     cameras: Query<(&Camera, &GlobalTransform), With<crate::camera::CombatCamera3d>>,
     windows: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
 ) {
-    // Use cached position if available
+    // Use cached center position if available — recompute left from current
+    // width each frame so the box stays centered even when width changes
+    // (e.g. during chosen expansion).
     if let Some(ref sel) = sel {
-        if let Some((cached_left, cached_top)) = sel.cached_pos {
-            for (_, mut node, _) in choice_q.iter_mut() {
-                node.left = Val::Px(cached_left);
+        if let Some((cached_center_x, cached_top)) = sel.cached_pos {
+            for (_, mut node, computed) in choice_q.iter_mut() {
+                let half_w = computed.size().x / 2.0;
+                node.left = Val::Px(cached_center_x - half_w);
                 node.top = Val::Px(cached_top);
             }
             return;
@@ -1405,8 +1436,11 @@ pub fn update_choice_position(
         node.left = Val::Px(left);
         node.top = Val::Px(top);
 
+        // Cache the CENTER X (not left edge) so the box stays centered
+        // even when its width changes during expansion.
         if let Some(ref mut sel) = sel {
-            sel.cached_pos = Some((left, top));
+            let center_x = left + ui_w / 2.0;
+            sel.cached_pos = Some((center_x, top));
         }
     }
 }

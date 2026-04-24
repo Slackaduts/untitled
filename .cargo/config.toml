@@ -3,5 +3,5 @@ linker = "clang"
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
 
 [env]
-CC = "clang"
-CXX = "clang++"
+CC = { value = "clang", force = true }
+CXX = { value = "clang++", force = true }

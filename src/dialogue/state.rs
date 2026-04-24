@@ -46,6 +46,9 @@ pub struct DialogueFade {
     pub fade_speed_override: Option<f32>,
     /// Current smooth screen position (left, top). Lerps toward target.
     pub current_pos: Option<(f32, f32)>,
+    /// Smoothed computed height for speech bubble positioning. Prevents abrupt
+    /// vertical jumps when text content changes between dialogue lines.
+    pub smoothed_height: Option<f32>,
 }
 
 impl DialogueFade {
@@ -59,6 +62,7 @@ impl DialogueFade {
             despawn_on_fade_out: false,
             fade_speed_override: None,
             current_pos: None,
+            smoothed_height: None,
         }
     }
 }
@@ -86,6 +90,13 @@ pub struct DialogueChoiceList;
 /// A single choice button. Stores the option index.
 #[derive(Component)]
 pub struct DialogueChoiceButton(pub usize);
+
+/// Tracks the target font size for smooth choice selection transitions.
+#[derive(Component)]
+pub struct ChoiceButtonStyle {
+    pub target_font_size: f32,
+    pub target_color: Color,
+}
 
 /// Portrait image (reserved for future use).
 #[derive(Component)]
