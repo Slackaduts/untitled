@@ -43,3 +43,8 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 
+# Patch bevy_hanabi to replace colons in the shader module label, which DXC on
+# Windows/DX12 misinterprets as a path prefix. Upstream issue: gfx-rs/wgpu#5659.
+[patch.crates-io]
+bevy_hanabi = { git = "https://github.com/Slackaduts/bevy_hanabi.git", rev = "bad2b538c71e5fc38ef40f83c26cc936d440a049" }
+
