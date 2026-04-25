@@ -27,9 +27,14 @@ pub fn camera_follow(
     target_q: Query<&Transform, (With<CameraTarget>, Without<CombatCamera3d>)>,
     mut camera_q: Query<&mut Transform, With<CombatCamera3d>>,
     combat_camera: Option<Res<super::combat::CombatCamera>>,
+    pan_state: Option<Res<super::cutscene::CameraPanState>>,
     time: Res<Time>,
 ) {
     if combat_camera.is_some_and(|cc| cc.active) {
+        return;
+    }
+    // Don't follow when a scripted pan is active
+    if pan_state.is_some() {
         return;
     }
 

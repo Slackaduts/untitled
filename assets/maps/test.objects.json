@@ -75,19 +75,43 @@
       "properties": {
         "sprite_type": "Lpc",
         "movement_mode": "None",
+        "lights": [],
+        "emitters": [],
+        "blend_height": 0.0,
+        "shadow_offset_x": 0.0,
+        "shadow_offset_y": 0.0,
+        "keywords": []
+      },
+      "collision_rects": [],
+      "door": null
+    },
+    {
+      "id": "7",
+      "name": null,
+      "sprite_key": "TestCharacter",
+      "tileset": "TestCharacter",
+      "tile_ids": [],
+      "grid_pos": [
+        11,
+        44
+      ],
+      "elevation": 0,
+      "properties": {
+        "sprite_type": "Lpc",
+        "movement_mode": "None",
         "lights": [
           {
             "ref_id": "light_0",
             "offset_x": 0.5,
-            "offset_y": 0.61,
-            "offset_z": 0.27,
+            "offset_y": 0.5,
+            "offset_z": 0.56,
             "color": [
-              1.0,
-              0.79909086,
-              0.6
+              0.9873479,
+              0.7536503,
+              0.36415467
             ],
-            "intensity": 0.3,
-            "radius": 195.0,
+            "intensity": 1.5,
+            "radius": 68.0,
             "shape": "point",
             "pulse": false,
             "flicker": false

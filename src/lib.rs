@@ -11,6 +11,7 @@ pub mod input;
 pub mod lighting;
 pub mod map;
 pub mod particles;
+pub mod post_process;
 pub mod save;
 pub mod scripting;
 pub mod sound;
@@ -56,6 +57,7 @@ impl Plugin for UntitledPlugin {
             .add_plugins(DialoguePlugin)
             .add_plugins(UiPlugin)
             .add_plugins(SavePlugin)
+            .add_plugins(post_process::PostProcessPlugin)
             .add_plugins(billboard::BillboardPropertiesPlugin)
             .add_plugins(tile_editor::TileEditorPlugin)
             .add_plugins(scene_builder::SceneBuilderPlugin)

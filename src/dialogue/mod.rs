@@ -109,7 +109,7 @@ pub fn start_yarn_node(
     project: &YarnProject,
     node_name: &str,
     blocking: bool,
-    speaker_instance: Option<String>,
+    speaker_map: Vec<(String, String)>,
 ) {
     let mut dialogue_runner = project.create_dialogue_runner(commands);
 
@@ -131,7 +131,7 @@ pub fn start_yarn_node(
     commands.insert_resource(DialogueState {
         runner_entity: entity,
         blocking,
-        speaker_instance,
+        speaker_map,
         pending_start_node: Some(node_name.to_string()),
         fading_out: false,
     });

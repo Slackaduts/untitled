@@ -35,7 +35,9 @@ impl Plugin for ScriptingPlugin {
             .add_systems(
                 Update,
                 (
-                    runner::start_pending_events,
+                    runner::detect_interactions,
+                    runner::start_pending_events
+                        .after(runner::detect_interactions),
                     runner::tick_coroutines
                         .after(runner::start_pending_events),
                     runner::start_pending_yarn_nodes

@@ -3,15 +3,306 @@
   "events": [
     {
       "id": "1",
-      "name": "TestGuy",
-      "trigger": "Parallel",
+      "name": "TestConversation",
+      "trigger": "Interact",
       "trigger_target": "#6",
       "actions": [
         {
           "action_id": "run_yarn_node_at",
           "args": {
-            "speaker": "#6",
-            "node": "TestEffects"
+            "node": "TestConvo",
+            "blocking": true,
+            "speakers": [
+              [
+                "Guard 1",
+                "#6"
+              ],
+              [
+                "Guard 2",
+                "#7"
+              ]
+            ]
+          }
+        }
+      ],
+      "enabled": false
+    },
+    {
+      "id": "2",
+      "name": "FeatureTest",
+      "trigger": "Parallel",
+      "trigger_target": null,
+      "actions": [
+        {
+          "action_id": "set_ambient",
+          "args": {
+            "intensity": 1.5,
+            "color": [
+              1.0,
+              0.9,
+              0.7
+            ]
+          }
+        },
+        {
+          "action_id": "camera_shake",
+          "args": {
+            "intensity": 8.0,
+            "duration": 0.6
+          }
+        },
+        {
+          "action_id": "screen_flash",
+          "args": {
+            "duration": 0.4,
+            "color": [
+              1.0,
+              1.0,
+              1.0
+            ]
+          }
+        },
+        {
+          "action_id": "wait",
+          "args": {
+            "seconds": 0.3
+          }
+        },
+        {
+          "action_id": "set_cinema_bars",
+          "args": {
+            "size": 0.1,
+            "color": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "easing": "QuadraticInOut",
+            "duration": 1.0
+          }
+        },
+        {
+          "action_id": "set_bloom",
+          "args": {
+            "softness": 0.3,
+            "intensity": 0.4,
+            "threshold": 0.8,
+            "duration": 1.0,
+            "easing": "SineInOut"
+          }
+        },
+        {
+          "action_id": "wait",
+          "args": {
+            "seconds": 1.5
+          }
+        },
+        {
+          "action_id": "set_sine_wave",
+          "args": {
+            "amp_y": 0.003,
+            "duration": 1.0,
+            "speed": 3.0,
+            "easing": "SineInOut",
+            "frequency": 15.0,
+            "amp_x": 0.005
+          }
+        },
+        {
+          "action_id": "wait",
+          "args": {
+            "seconds": 2.0
+          }
+        },
+        {
+          "action_id": "set_sine_wave",
+          "args": {
+            "amp_y": 0.0,
+            "amp_x": 0.0,
+            "speed": 3.0,
+            "frequency": 15.0,
+            "easing": "SineOut",
+            "duration": 1.0
+          }
+        },
+        {
+          "action_id": "set_swirl",
+          "args": {
+            "center_x": 0.5,
+            "center_y": 0.5,
+            "angle": 3.0,
+            "radius": 0.8,
+            "easing": "QuadraticIn",
+            "duration": 1.5
+          }
+        },
+        {
+          "action_id": "set_swirl",
+          "args": {
+            "angle": 0.0,
+            "duration": 1.5,
+            "easing": "QuadraticOut",
+            "center_x": 0.5,
+            "radius": 0.8,
+            "center_y": 0.5
+          }
+        },
+        {
+          "action_id": "set_posterize",
+          "args": {
+            "easing": "Linear",
+            "levels": 6.0,
+            "duration": 0.5
+          }
+        },
+        {
+          "action_id": "wait",
+          "args": {
+            "seconds": 1.5
+          }
+        },
+        {
+          "action_id": "set_posterize",
+          "args": {
+            "duration": 0.5,
+            "easing": "Linear",
+            "levels": 0.0
+          }
+        },
+        {
+          "action_id": "set_lens_distortion",
+          "args": {
+            "duration": 0.8,
+            "easing": "QuadraticInOut",
+            "zoom": 1.0,
+            "intensity": 0.8
+          }
+        },
+        {
+          "action_id": "set_lens_distortion",
+          "args": {
+            "easing": "QuadraticInOut",
+            "duration": 0.8,
+            "zoom": 1.0,
+            "intensity": 0.0
+          }
+        },
+        {
+          "action_id": "set_zoom",
+          "args": {
+            "amount": 1.3,
+            "easing": "SineInOut",
+            "duration": 1.0
+          }
+        },
+        {
+          "action_id": "set_zoom",
+          "args": {
+            "duration": 1.0,
+            "amount": 1.0,
+            "easing": "SineInOut"
+          }
+        },
+        {
+          "action_id": "reset_fx",
+          "args": {
+            "duration": 0.5,
+            "effect": "Bloom",
+            "easing": "Linear"
+          }
+        },
+        {
+          "action_id": "reset_fx",
+          "args": {
+            "easing": "SineOut",
+            "effect": "All Custom FX",
+            "duration": 1.0
+          }
+        },
+        {
+          "action_id": "set_ambient",
+          "args": {
+            "color": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "intensity": 1.0
+          }
+        }
+      ],
+      "enabled": false
+    },
+    {
+      "id": "3",
+      "name": "TEST",
+      "trigger": "Parallel",
+      "trigger_target": "#6",
+      "actions": [
+        {
+          "action_id": "move_to",
+          "args": {
+            "easing": "QuadraticIn",
+            "target": "#6",
+            "position": [
+              9.0,
+              44.0
+            ]
+          }
+        },
+        {
+          "action_id": "move_to",
+          "args": {
+            "easing": "QuadraticIn",
+            "position": [
+              14.0,
+              44.0
+            ],
+            "target": "#6"
+          }
+        },
+        {
+          "action_id": "move_to",
+          "args": {
+            "easing": "QuadraticIn",
+            "position": [
+              18.0,
+              41.0
+            ],
+            "target": "#6"
+          }
+        },
+        {
+          "action_id": "move_to",
+          "args": {
+            "position": [
+              16.0,
+              40.0
+            ],
+            "target": "#6",
+            "easing": "QuadraticIn"
+          }
+        },
+        {
+          "action_id": "move_to",
+          "args": {
+            "target": "#6",
+            "easing": "QuadraticIn",
+            "position": [
+              5.0,
+              32.0
+            ]
+          }
+        },
+        {
+          "action_id": "move_to",
+          "args": {
+            "easing": "QuadraticIn",
+            "target": "#6",
+            "position": [
+              9.0,
+              44.0
+            ]
           }
         }
       ],

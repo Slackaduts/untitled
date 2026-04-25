@@ -42,6 +42,9 @@ pub enum ArgType {
     /// A yarn dialogue node name — scene builder shows a searchable dropdown
     /// populated from the compiled YarnProject.
     YarnNode,
+    /// Speaker assignment map — shows an InstanceRef picker per speaker found
+    /// in the selected yarn node. Requires a sibling `YarnNode` arg named "node".
+    SpeakerMap,
 }
 
 impl ArgType {
@@ -50,6 +53,7 @@ impl ArgType {
         matches!(self,
             Self::Float { .. } | Self::Int { .. } | Self::Bool { .. }
             | Self::Easing | Self::Direction | Self::Color | Self::Spline
+            | Self::SpeakerMap
         )
     }
 
@@ -110,6 +114,7 @@ pub enum ActionCategory {
     Combat,
     World,
     Flow,
+    PostFx,
 }
 
 impl ActionCategory {
@@ -124,6 +129,7 @@ impl ActionCategory {
             Self::Combat => "Combat",
             Self::World => "World",
             Self::Flow => "Flow",
+            Self::PostFx => "Post FX",
         }
     }
 
@@ -132,6 +138,7 @@ impl ActionCategory {
             Self::Movement, Self::Camera, Self::Dialogue,
             Self::Lighting, Self::Sound, Self::Vfx,
             Self::Combat, Self::World, Self::Flow,
+            Self::PostFx,
         ]
     }
 }
@@ -169,6 +176,7 @@ impl SceneActionDef {
                 ArgType::Easing => "\"Linear\"".to_string(),
                 ArgType::Spline => "{}".to_string(),
                 ArgType::YarnNode => "\"NodeName\"".to_string(),
+                ArgType::SpeakerMap => "{}".to_string(),
             }
         }).collect();
         format!("{}({})", self.lua_fn, args_str.join(", "))
@@ -292,10 +300,10 @@ pub fn register_builtin_actions(mut registry: ResMut<SceneActionRegistry>) {
             label: "Run Yarn Node At",
             category: ActionCategory::Dialogue,
             lua_fn: "scene.run_yarn_node_at",
-            description: "Start a Yarn dialogue as a speech bubble near a speaker instance",
+            description: "Start a Yarn dialogue as speech bubbles near speaker instances",
             args: vec![
                 ArgDef { name: "node", label: "Node Name", arg_type: ArgType::YarnNode, optional: false },
-                ArgDef { name: "speaker", label: "Speaker", arg_type: ArgType::InstanceRef, optional: false },
+                ArgDef { name: "speakers", label: "Speakers", arg_type: ArgType::SpeakerMap, optional: false },
                 ArgDef { name: "blocking", label: "Blocking", arg_type: ArgType::Bool { default: true }, optional: false },
             ],
         },
@@ -431,6 +439,305 @@ pub fn register_builtin_actions(mut registry: ResMut<SceneActionRegistry>) {
             lua_fn: "",
             description: "End a parallel block and wait for all parallel actions to finish",
             args: vec![],
+        },
+
+        // ── Post FX ──
+        SceneActionDef {
+            id: "set_bloom",
+            label: "Set Bloom",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_bloom",
+            description: "Transition bloom effect to target values",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.15 }, optional: false },
+                ArgDef { name: "threshold", label: "Threshold", arg_type: ArgType::Float { min: 0.0, max: 4.0, default: 0.0 }, optional: true },
+                ArgDef { name: "softness", label: "Softness", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "reset_fx",
+            label: "Reset Effect",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.reset_fx",
+            description: "Reset a post-processing effect to defaults",
+            args: vec![
+                ArgDef { name: "effect", label: "Effect", arg_type: ArgType::Choice(vec![
+                    "Bloom", "Color Grading", "Chromatic Aberration", "Depth of Field", "All Custom FX",
+                ]), optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_tonemapping",
+            label: "Set Tonemapping",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_tonemapping",
+            description: "Switch tonemapping algorithm (instant)",
+            args: vec![
+                ArgDef { name: "algorithm", label: "Algorithm", arg_type: ArgType::Choice(vec![
+                    "None", "Reinhard", "ReinhardLuminance", "AcesFitted", "AgX",
+                    "SomewhatBoring", "TonyMcMapface", "BlenderFilmic",
+                ]), optional: false },
+            ],
+        },
+        SceneActionDef {
+            id: "set_color_grading",
+            label: "Set Color Grading",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_color_grading",
+            description: "Transition color grading to target values",
+            args: vec![
+                ArgDef { name: "exposure", label: "Exposure (EV)", arg_type: ArgType::Float { min: -8.0, max: 8.0, default: 0.0 }, optional: false },
+                ArgDef { name: "temperature", label: "Temperature", arg_type: ArgType::Float { min: -3.0, max: 3.0, default: 0.0 }, optional: true },
+                ArgDef { name: "tint", label: "Tint", arg_type: ArgType::Float { min: -3.0, max: 3.0, default: 0.0 }, optional: true },
+                ArgDef { name: "hue", label: "Hue", arg_type: ArgType::Float { min: -3.14, max: 3.14, default: 0.0 }, optional: true },
+                ArgDef { name: "post_saturation", label: "Post Saturation", arg_type: ArgType::Float { min: 0.0, max: 3.0, default: 1.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_chromatic_aberration",
+            label: "Set Chromatic Aberration",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_chromatic_aberration",
+            description: "Transition chromatic aberration intensity",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 0.2, default: 0.02 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_dof",
+            label: "Set Depth of Field",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_dof",
+            description: "Transition depth of field settings",
+            args: vec![
+                ArgDef { name: "focal_distance", label: "Focal Distance", arg_type: ArgType::Float { min: 1.0, max: 3000.0, default: 900.0 }, optional: false },
+                ArgDef { name: "aperture", label: "Aperture (f-stops)", arg_type: ArgType::Float { min: 0.5, max: 32.0, default: 2.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_vignette",
+            label: "Set Vignette",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_vignette",
+            description: "Transition vignette effect",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.4 }, optional: false },
+                ArgDef { name: "smoothness", label: "Smoothness", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.5 }, optional: true },
+                ArgDef { name: "roundness", label: "Roundness", arg_type: ArgType::Float { min: 0.2, max: 3.0, default: 1.0 }, optional: true },
+                ArgDef { name: "color", label: "Color", arg_type: ArgType::Color, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_scanlines",
+            label: "Set Scanlines",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_scanlines",
+            description: "Transition scanline effect",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.3 }, optional: false },
+                ArgDef { name: "count", label: "Line Count", arg_type: ArgType::Float { min: 50.0, max: 2000.0, default: 400.0 }, optional: true },
+                ArgDef { name: "speed", label: "Scroll Speed", arg_type: ArgType::Float { min: 0.0, max: 20.0, default: 0.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_film_grain",
+            label: "Set Film Grain",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_film_grain",
+            description: "Transition film grain effect",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 0.5, default: 0.1 }, optional: false },
+                ArgDef { name: "speed", label: "Speed", arg_type: ArgType::Float { min: 0.1, max: 5.0, default: 1.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_fade",
+            label: "Set Fade",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_fade",
+            description: "Fade screen to/from a color",
+            args: vec![
+                ArgDef { name: "color", label: "Color", arg_type: ArgType::Color, optional: false },
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 1.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 1.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_pixelation",
+            label: "Set Pixelation",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_pixelation",
+            description: "Transition pixelation cell size (0 = disabled)",
+            args: vec![
+                ArgDef { name: "cell_size", label: "Cell Size", arg_type: ArgType::Float { min: 0.0, max: 32.0, default: 4.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_color_tint",
+            label: "Set Color Tint",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_color_tint",
+            description: "Transition screen color tint",
+            args: vec![
+                ArgDef { name: "color", label: "Color", arg_type: ArgType::Color, optional: false },
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.5 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_color_adjust",
+            label: "Set Color Adjust",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_color_adjust",
+            description: "Transition brightness, contrast, saturation, and invert",
+            args: vec![
+                ArgDef { name: "brightness", label: "Brightness", arg_type: ArgType::Float { min: -1.0, max: 1.0, default: 0.0 }, optional: false },
+                ArgDef { name: "contrast", label: "Contrast", arg_type: ArgType::Float { min: 0.0, max: 3.0, default: 1.0 }, optional: false },
+                ArgDef { name: "saturation", label: "Saturation", arg_type: ArgType::Float { min: 0.0, max: 3.0, default: 1.0 }, optional: false },
+                ArgDef { name: "invert", label: "Invert", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_sine_wave",
+            label: "Set Sine Wave",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_sine_wave",
+            description: "Wavy screen distortion (dream, underwater, drunk)",
+            args: vec![
+                ArgDef { name: "amp_x", label: "Amplitude X", arg_type: ArgType::Float { min: 0.0, max: 0.1, default: 0.01 }, optional: false },
+                ArgDef { name: "amp_y", label: "Amplitude Y", arg_type: ArgType::Float { min: 0.0, max: 0.1, default: 0.0 }, optional: false },
+                ArgDef { name: "frequency", label: "Frequency", arg_type: ArgType::Float { min: 1.0, max: 100.0, default: 20.0 }, optional: true },
+                ArgDef { name: "speed", label: "Speed", arg_type: ArgType::Float { min: 0.0, max: 20.0, default: 3.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_swirl",
+            label: "Set Swirl",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_swirl",
+            description: "Swirl/twist distortion from a center point",
+            args: vec![
+                ArgDef { name: "angle", label: "Angle (rad)", arg_type: ArgType::Float { min: -12.0, max: 12.0, default: 1.0 }, optional: false },
+                ArgDef { name: "radius", label: "Radius (UV)", arg_type: ArgType::Float { min: 0.01, max: 1.5, default: 0.5 }, optional: true },
+                ArgDef { name: "center_x", label: "Center X", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.5 }, optional: true },
+                ArgDef { name: "center_y", label: "Center Y", arg_type: ArgType::Float { min: 0.0, max: 1.0, default: 0.5 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_lens_distortion",
+            label: "Set Lens Distortion",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_lens_distortion",
+            description: "Barrel (+) or pincushion (-) lens distortion",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: -2.0, max: 2.0, default: 0.5 }, optional: false },
+                ArgDef { name: "zoom", label: "Zoom Compensation", arg_type: ArgType::Float { min: 0.5, max: 2.0, default: 1.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_shake",
+            label: "Set Screen Shake (UV)",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_shake",
+            description: "UV-based screen shake effect",
+            args: vec![
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.0, max: 0.1, default: 0.01 }, optional: false },
+                ArgDef { name: "speed", label: "Speed", arg_type: ArgType::Float { min: 0.1, max: 10.0, default: 1.0 }, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_zoom",
+            label: "Set Zoom",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_zoom",
+            description: "UV zoom (1.0 = normal, >1 = zoom in, <1 = zoom out)",
+            args: vec![
+                ArgDef { name: "amount", label: "Amount", arg_type: ArgType::Float { min: 0.1, max: 5.0, default: 1.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_rotation",
+            label: "Set Rotation",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_rotation",
+            description: "Rotate the screen around center (radians)",
+            args: vec![
+                ArgDef { name: "angle", label: "Angle (rad)", arg_type: ArgType::Float { min: -6.28, max: 6.28, default: 0.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_cinema_bars",
+            label: "Set Cinema Bars",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_cinema_bars",
+            description: "Letterbox bars at top/bottom (0 = off)",
+            args: vec![
+                ArgDef { name: "size", label: "Bar Size", arg_type: ArgType::Float { min: 0.0, max: 0.3, default: 0.1 }, optional: false },
+                ArgDef { name: "color", label: "Color", arg_type: ArgType::Color, optional: true },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.5 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "set_posterize",
+            label: "Set Posterize",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.set_posterize",
+            description: "Reduce color levels (0 = off, 2-32 typical)",
+            args: vec![
+                ArgDef { name: "levels", label: "Levels", arg_type: ArgType::Float { min: 0.0, max: 32.0, default: 4.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.0, max: 30.0, default: 0.0 }, optional: false },
+                ArgDef { name: "easing", label: "Easing", arg_type: ArgType::Easing, optional: true },
+            ],
+        },
+        SceneActionDef {
+            id: "spawn_shockwave",
+            label: "Spawn Shockwave",
+            category: ActionCategory::PostFx,
+            lua_fn: "scene.spawn_shockwave",
+            description: "Spawn an expanding ring distortion on the terrain plane",
+            args: vec![
+                ArgDef { name: "position", label: "Position", arg_type: ArgType::Position, optional: false },
+                ArgDef { name: "radius", label: "Max Radius", arg_type: ArgType::Float { min: 10.0, max: 1000.0, default: 200.0 }, optional: false },
+                ArgDef { name: "duration", label: "Duration (s)", arg_type: ArgType::Float { min: 0.1, max: 10.0, default: 0.8 }, optional: false },
+                ArgDef { name: "intensity", label: "Intensity", arg_type: ArgType::Float { min: 0.001, max: 0.2, default: 0.04 }, optional: true },
+                ArgDef { name: "thickness", label: "Thickness", arg_type: ArgType::Float { min: 5.0, max: 200.0, default: 40.0 }, optional: true },
+                ArgDef { name: "chromatic", label: "Chromatic Split", arg_type: ArgType::Float { min: 0.0, max: 0.05, default: 0.005 }, optional: true },
+            ],
         },
     ];
 }

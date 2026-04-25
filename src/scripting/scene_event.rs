@@ -101,6 +101,8 @@ pub enum ActionArgValue {
     Color([f32; 3]),
     /// A bezier spline: list of waypoints, each with [x, y, z, handle_in_x, handle_in_y, handle_in_z, handle_out_x, handle_out_y, handle_out_z].
     SplinePoints(Vec<SplineWaypoint>),
+    /// Speaker mapping: pairs of [yarn_character_name, instance_name].
+    SpeakerMap(Vec<[String; 2]>),
 }
 
 /// A single waypoint in a bezier spline.
@@ -168,6 +170,12 @@ impl ActionArgValue {
                         wp.handle_in[0], wp.handle_in[1], wp.handle_in_z,
                         wp.handle_out[0], wp.handle_out[1], wp.handle_out_z,
                     )
+                }).collect();
+                format!("{{{}}}", entries.join(", "))
+            }
+            Self::SpeakerMap(pairs) => {
+                let entries: Vec<String> = pairs.iter().map(|[char_name, instance]| {
+                    format!("[\"{}\"] = \"{}\"", char_name.replace('"', "\\\""), instance.replace('"', "\\\""))
                 }).collect();
                 format!("{{{}}}", entries.join(", "))
             }
@@ -428,6 +436,76 @@ fn map_name_from_tmx(tmx_path: &str) -> String {
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Extract all unique speaker/character names from a yarn node.
+/// Parses raw `.yarn` files looking for `CharacterName: text` lines within the given node.
+pub fn extract_yarn_speakers(tmx_path: &str, node_name: &str) -> Vec<String> {
+    let map_name = map_name_from_tmx(tmx_path);
+    let dir = format!("assets/dialogue/{map_name}");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut speakers = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |e| e != "yarn") {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+
+        // Find the node section
+        let mut in_node = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("title:") {
+                let title = trimmed["title:".len()..].trim();
+                in_node = title == node_name;
+                continue;
+            }
+            if trimmed == "---" {
+                continue; // body start marker
+            }
+            if trimmed == "===" {
+                if in_node {
+                    break; // end of this node
+                }
+                continue;
+            }
+            if !in_node {
+                continue;
+            }
+
+            // Skip commands, options, comments
+            let stripped = trimmed.trim_start_matches(|c: char| c == ' ' || c == '\t' || c == '>');
+            if stripped.starts_with("->") || stripped.starts_with("<<") || stripped.starts_with("//") || stripped.is_empty() {
+                continue;
+            }
+
+            // Check for "CharacterName: dialogue text" pattern.
+            // Yarn Spinner uses "Name: text" where the colon is followed by a space.
+            // Names can contain spaces, digits, underscores (e.g. "Guard 1").
+            if let Some(colon_pos) = stripped.find(": ") {
+                let candidate = stripped[..colon_pos].trim();
+                // Must be non-empty, only word chars and spaces, and not start
+                // with a bracket (which would be a markup tag like [b]).
+                if !candidate.is_empty()
+                    && !candidate.starts_with('[')
+                    && candidate.chars().all(|c| c.is_alphanumeric() || c == '_' || c == ' ')
+                    && !speakers.contains(&candidate.to_string())
+                {
+                    speakers.push(candidate.to_string());
+                }
+            }
+        }
+        if in_node {
+            break; // found and parsed the node
+        }
+    }
+    speakers
 }
 
 /// Check whether any event in the list uses a dialogue action (run_yarn_node).

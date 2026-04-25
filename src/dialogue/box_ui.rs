@@ -86,7 +86,7 @@ pub fn spawn_dialogue_box(
         return;
     }
     let font = dialogue_font.regular.clone();
-    if dialogue_state.speaker_instance.is_some() {
+    if !dialogue_state.speaker_map.is_empty() {
         spawn_speech_bubble(&mut commands, &dialogue_state, &font);
     } else {
         spawn_bottom_box(&mut commands, &font);
@@ -187,7 +187,8 @@ fn spawn_bottom_box(commands: &mut Commands, font: &Handle<Font>) {
 }
 
 fn spawn_speech_bubble(commands: &mut Commands, state: &DialogueState, font: &Handle<Font>) {
-    let instance_name = state.speaker_instance.as_ref().unwrap();
+    // Use the first speaker's instance as the initial anchor position
+    let instance_name = &state.speaker_map[0].1;
 
     // Name tab — centered text
     commands.spawn((
@@ -316,9 +317,24 @@ pub fn on_present_line(
     mut name_tab_vis: Query<&mut Visibility, (With<DialogueNameTab>, Without<DialogueChoiceList>, Without<DialogueContinueIndicator>)>,
     mut indicator_vis: Query<&mut Visibility, (With<DialogueContinueIndicator>, Without<DialogueNameTab>, Without<DialogueChoiceList>)>,
     dialogue_font: Res<DialogueFont>,
+    dialogue_state: Option<Res<DialogueState>>,
+    mut anchor_q: Query<&mut SpeechBubbleAnchor>,
 ) {
     let line = &trigger.event().line;
     let speaker = line.character_name().unwrap_or("").to_string();
+
+    // Update speech bubble anchors to track the current speaker's instance
+    if let Some(ref state) = dialogue_state {
+        if !state.speaker_map.is_empty() && !speaker.is_empty() {
+            if let Some((_, instance)) = state.speaker_map.iter().find(|(c, _)| c == &speaker) {
+                for mut anchor in anchor_q.iter_mut() {
+                    if anchor.instance_name != *instance {
+                        anchor.instance_name = instance.clone();
+                    }
+                }
+            }
+        }
+    }
 
     let auto_advance = line.metadata.iter().find_map(|tag| {
         let tag = tag.trim_start_matches('#');
@@ -1157,28 +1173,6 @@ impl ScreenRect {
     }
 }
 
-/// Build a single combined exclusion zone from the player's sprite rect to the
-/// speaker's sprite rect (covering both entities and the space between them).
-fn build_exclusion_zone(
-    player_ent: Entity,
-    speaker_ent: Option<Entity>,
-    transform_q: &Query<&GlobalTransform>,
-    billboard_q: &Query<&BillboardHeight>,
-    camera: &Camera,
-    cam_tf: &GlobalTransform,
-) -> Option<ScreenRect> {
-    let player_rect = entity_screen_rect(player_ent, transform_q, billboard_q, camera, cam_tf)?;
-
-    if let Some(speaker) = speaker_ent {
-        if let Some(speaker_rect) = entity_screen_rect(speaker, transform_q, billboard_q, camera, cam_tf) {
-            // Union of both rects = one big exclusion zone from one entity's
-            // furthest edge to the other's furthest edge
-            return Some(player_rect.union(&speaker_rect));
-        }
-    }
-    Some(player_rect)
-}
-
 /// Resolve a placed-object entity by name or `#id`.
 fn resolve_placed_object(
     name: &str,
@@ -1301,6 +1295,7 @@ pub fn update_speech_bubble_position(
     billboard_q: Query<&BillboardHeight>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::camera::CombatCamera3d>>,
     windows: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    dialogue_state: Option<Res<DialogueState>>,
 ) {
     let Ok((camera, cam_tf)) = cameras.single() else { return };
     let Ok(window) = windows.single() else { return };
@@ -1308,6 +1303,33 @@ pub fn update_speech_bubble_position(
     let win_h = window.resolution.height();
 
     let player_ent = player_q.single().ok();
+
+    // Build exclusion zone that covers the player + ALL speakers in the conversation.
+    // This prevents the bubble from overlapping any participant.
+    let exclusion = {
+        let mut zone: Option<ScreenRect> = None;
+
+        // Start with the player
+        if let Some(pe) = player_ent {
+            zone = entity_screen_rect(pe, &transform_q, &billboard_q, camera, cam_tf);
+        }
+
+        // Union in all speaker instances from the speaker map
+        if let Some(ref state) = dialogue_state {
+            for (_, instance_name) in &state.speaker_map {
+                if let Some(ent) = resolve_placed_object(instance_name, &placed_q) {
+                    if let Some(rect) = entity_screen_rect(ent, &transform_q, &billboard_q, camera, cam_tf) {
+                        zone = Some(match zone {
+                            Some(z) => z.union(&rect),
+                            None => rect,
+                        });
+                    }
+                }
+            }
+        }
+
+        zone
+    };
 
     let dt = time.delta_secs();
     for (anchor, mut node, computed, mut fade) in main_q.iter_mut() {
@@ -1331,12 +1353,6 @@ pub fn update_speech_bubble_position(
             fade.smoothed_height = Some(ui_h_raw);
             ui_h_raw
         };
-
-        let exclusion = build_exclusion_zone(
-            player_ent.unwrap_or(speaker_ent),
-            Some(speaker_ent),
-            &transform_q, &billboard_q, camera, cam_tf,
-        );
 
         let (left, top) = find_best_position(
             speaker_rect.center_x(), speaker_rect.top, speaker_rect.bottom,
@@ -1389,6 +1405,7 @@ pub fn update_choice_position(
     billboard_q: Query<&BillboardHeight>,
     cameras: Query<(&Camera, &GlobalTransform), With<crate::camera::CombatCamera3d>>,
     windows: Query<&bevy::window::Window, With<bevy::window::PrimaryWindow>>,
+    dialogue_state: Option<Res<DialogueState>>,
 ) {
     // Use cached center position if available — recompute left from current
     // width each frame so the box stays centered even when width changes
@@ -1412,19 +1429,25 @@ pub fn update_choice_position(
     let Ok(player_ent) = player_q.single() else { return };
     let Some(player_rect) = entity_screen_rect(player_ent, &transform_q, &billboard_q, camera, cam_tf) else { return };
 
-    for (choice_at, mut node, computed) in choice_q.iter_mut() {
+    for (_choice_at, mut node, computed) in choice_q.iter_mut() {
         let ui_w = computed.size().x.max(150.0);
         let ui_h = computed.size().y;
         if ui_h < 1.0 { continue; }
 
-        let speaker_ent = choice_at.speaker_instance.as_ref()
-            .and_then(|name| resolve_placed_object(name, &placed_q));
-
-        // Build combined exclusion zone
-        let exclusion = build_exclusion_zone(
-            player_ent, speaker_ent,
-            &transform_q, &billboard_q, camera, cam_tf,
-        );
+        // Build exclusion zone covering player + all speakers in the conversation
+        let mut exclusion = entity_screen_rect(player_ent, &transform_q, &billboard_q, camera, cam_tf);
+        if let Some(ref state) = dialogue_state {
+            for (_, instance_name) in &state.speaker_map {
+                if let Some(ent) = resolve_placed_object(instance_name, &placed_q) {
+                    if let Some(rect) = entity_screen_rect(ent, &transform_q, &billboard_q, camera, cam_tf) {
+                        exclusion = Some(match exclusion {
+                            Some(z) => z.union(&rect),
+                            None => rect,
+                        });
+                    }
+                }
+            }
+        }
 
         // Anchor to the PLAYER, avoid zone if possible
         let (left, top) = find_best_position(

@@ -1,0 +1,14 @@
+title: TestConvo
+---
+Guard 1: Hey, you good? You took a pretty big fall back there.
+Guard 2: Yeah I'm alright.
+Guard 2: Knees' are a little rough, I'm just glad that gonk didn't get away.
+Guard 1: Yeah, no kidding. We'd be up to our asses in paperwork if he was-#auto:0.5
+Guard 2: [b]Hey kid![/b] Where do you think you're going?
+-> Uhhh, I'm not sure.
+    Guard 2: Well you better get sure real quick
+-> Don't worry 'bout it.
+    Guard 1: Oh yeah? We'll decide what to worry about 'round here.
+-> Go to hell.
+    Guard 1: Get him!
+===

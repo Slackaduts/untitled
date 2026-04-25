@@ -6,7 +6,9 @@ pub mod visible_rect;
 use bevy::audio::SpatialListener;
 use bevy::prelude::*;
 use bevy::light::ShadowFilteringMethod;
+use bevy::render::view::Hdr;
 use crate::app_state::GameState;
+use crate::post_process::custom::CustomPostProcess;
 use crate::sound::spatial::GameListener;
 
 pub struct CameraPlugin;
@@ -26,6 +28,10 @@ impl Plugin for CameraPlugin {
                 Update,
                 (
                     visible_rect::update_camera_visible_rect,
+                    cutscene::tick_camera_pan,
+                    cutscene::tick_camera_shake
+                        .after(follow::camera_follow)
+                        .after(cutscene::tick_camera_pan),
                     follow::camera_follow,
                     combat::setup_billboard_tiles,
                     combat::combat_camera_system,
@@ -71,6 +77,10 @@ fn spawn_camera(mut commands: Commands) {
         CombatCamera3d,
         // Gaussian PCF: 5x5 filter kernel for soft shadow edges
         ShadowFilteringMethod::Gaussian,
+        // HDR render target — required for tonemapping and color grading to run.
+        Hdr,
+        // Custom post-process effects (vignette, scanlines, grain, etc.)
+        CustomPostProcess::enabled(),
     ));
 
     // MSAA 2x: hardware-native on all platforms, near-zero cost.

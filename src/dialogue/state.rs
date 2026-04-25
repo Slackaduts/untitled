@@ -19,8 +19,9 @@ pub struct DialogueState {
     pub runner_entity: Entity,
     /// If true, player movement and NPC AI are paused while dialogue is active.
     pub blocking: bool,
-    /// If set, dialogue is a speech bubble positioned near this placed object instance.
-    pub speaker_instance: Option<String>,
+    /// Mapping of yarn character name → placed object instance name.
+    /// Used to position speech bubbles near the currently speaking character.
+    pub speaker_map: Vec<(String, String)>,
     /// Node name to start — consumed by `start_deferred_yarn_node` after the UI spawns.
     pub pending_start_node: Option<String>,
     /// True while dialogue is fading out — blocks input and typewriter.

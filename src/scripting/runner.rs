@@ -24,7 +24,10 @@ struct RunningCoroutine {
     wait_for_script: Option<String>,
     /// Wait until the active dialogue completes (DialogueState resource removed).
     wait_for_dialogue: bool,
+    /// When true, this coroutine blocks all non-parallel coroutines until finished (AutoRun).
     blocking: bool,
+    /// When true, this coroutine keeps running even when a blocker is active (Parallel events).
+    parallel: bool,
     finished: bool,
 }
 
@@ -37,8 +40,42 @@ pub struct SceneRunner {
     pub pending_start: Vec<SceneEvent>,
     /// All events for the current map (used to look up Script-triggered events).
     pub all_events: Vec<SceneEvent>,
-    /// Pending yarn node requests: (node_name, blocking, speaker_instance).
-    pub pending_yarn_nodes: Vec<(String, bool, Option<String>)>,
+    /// Pending yarn node requests: (node_name, blocking, speaker_map).
+    pub pending_yarn_nodes: Vec<(String, bool, Vec<(String, String)>)>,
+    /// Pending interact/touch triggers: (event_id, blocking).
+    /// Set by interaction systems, drained by start_pending_events.
+    pub pending_trigger: Vec<(String, EventTrigger)>,
+}
+
+impl SceneRunner {
+    /// Request that an Interact or Touch event be started for the given instance name.
+    /// The runner will find matching events and start coroutines for them.
+    pub fn trigger_for_instance(&mut self, instance_name: &str, trigger: EventTrigger) {
+        for i in 0..self.all_events.len() {
+            let e = &self.all_events[i];
+            if !e.enabled || e.trigger != trigger || e.trigger_target.as_deref() != Some(instance_name) {
+                continue;
+            }
+            let id = &e.id;
+            if self.coroutines.iter().any(|c| c.event_id == *id && !c.finished) {
+                continue;
+            }
+            if self.pending_trigger.iter().any(|(pid, _)| pid == id) {
+                continue;
+            }
+            self.pending_trigger.push((id.clone(), trigger.clone()));
+        }
+    }
+
+    /// Whether any blocking (AutoRun/Interact) coroutine is currently running.
+    pub fn has_blocker(&self) -> bool {
+        self.coroutines.iter().any(|c| c.blocking && !c.finished)
+    }
+
+    /// Reset the auto-run guard so AutoRun events fire again (e.g. on map reload).
+    pub fn clear_auto_run(&mut self) {
+        self.auto_run_fired.clear();
+    }
 }
 
 /// The Lua preamble that defines the `scene` table.
@@ -48,6 +85,15 @@ scene = scene or {}
 
 function scene.wait(seconds)
     coroutine.yield("wait:" .. tostring(seconds))
+end
+
+-- Helper: yield a command, then automatically wait for its duration.
+-- This makes sequential events block until the transition finishes.
+function scene._do(cmd_str, duration)
+    coroutine.yield(cmd_str)
+    if duration and duration > 0 then
+        coroutine.yield("wait:" .. tostring(duration))
+    end
 end
 
 function scene.move_to(name, pos, speed, easing)
@@ -78,9 +124,17 @@ function scene.run_yarn_node(node, blocking)
     coroutine.yield("run_yarn_node:" .. node .. ":" .. tostring(blocking))
 end
 
-function scene.run_yarn_node_at(node, speaker, blocking)
+function scene.run_yarn_node_at(node, speakers, blocking)
     if blocking == nil then blocking = true end
-    coroutine.yield("run_yarn_node_at:" .. node .. ":" .. speaker .. ":" .. tostring(blocking))
+    -- speakers is a table { ["CharName"] = "instance_name", ... }
+    -- Serialize as "CharName=instance|CharName2=instance2"
+    local parts = {}
+    if speakers then
+        for char_name, inst in pairs(speakers) do
+            table.insert(parts, char_name .. "=" .. inst)
+        end
+    end
+    coroutine.yield("run_yarn_node_at:" .. node .. ":" .. table.concat(parts, "|") .. ":" .. tostring(blocking))
 end
 
 function scene.set_time_of_day(hour)
@@ -101,11 +155,11 @@ function scene.set_ambient(color, intensity)
 end
 
 function scene.camera_pan(target, duration)
-    coroutine.yield("camera_pan:" .. tostring(target.x) .. ":" .. tostring(target.y) .. ":" .. tostring(duration))
+    scene._do("camera_pan:" .. tostring(target.x) .. ":" .. tostring(target.y) .. ":" .. tostring(duration), duration)
 end
 
 function scene.camera_shake(intensity, duration)
-    coroutine.yield("camera_shake:" .. tostring(intensity) .. ":" .. tostring(duration))
+    scene._do("camera_shake:" .. tostring(intensity) .. ":" .. tostring(duration), duration)
 end
 
 function scene.set_flag(key, value)
@@ -120,6 +174,11 @@ function scene.spawn_particle(def_id, pos)
     coroutine.yield("spawn_particle:" .. def_id .. ":" .. tostring(pos.x) .. ":" .. tostring(pos.y))
 end
 
+function scene.screen_flash(color, duration)
+    duration = duration or 0.3
+    scene._do("screen_flash:" .. tostring(color.r) .. ":" .. tostring(color.g) .. ":" .. tostring(color.b) .. ":" .. tostring(duration), duration)
+end
+
 function scene.wait_for_movement(name)
     coroutine.yield("wait_for_movement:" .. name)
 end
@@ -127,11 +186,204 @@ end
 function scene.call_script(name)
     coroutine.yield("call_script:" .. name)
 end
+
+-- ── Post FX ──
+
+function scene.set_bloom(intensity, threshold, softness, duration, easing)
+    threshold = threshold or 0
+    softness = softness or 0
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_bloom:" .. tostring(intensity) .. ":" .. tostring(threshold) .. ":" .. tostring(softness) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_bloom(duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("reset_bloom:" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_fx(effect, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    local cmd = nil
+    if effect == "Bloom" then cmd = "reset_bloom"
+    elseif effect == "Color Grading" then cmd = "reset_color_grading"
+    elseif effect == "Chromatic Aberration" then cmd = "reset_chromatic_aberration"
+    elseif effect == "Depth of Field" then cmd = "reset_dof"
+    elseif effect == "All Custom FX" then cmd = "reset_custom_fx"
+    end
+    if cmd then
+        scene._do(cmd .. ":" .. tostring(duration) .. ":" .. easing, duration)
+    end
+end
+
+function scene.set_tonemapping(algorithm)
+    coroutine.yield("set_tonemapping:" .. algorithm)
+end
+
+function scene.set_color_grading(exposure, temperature, tint, hue, post_saturation, duration, easing)
+    temperature = temperature or 0
+    tint = tint or 0
+    hue = hue or 0
+    post_saturation = post_saturation or 1
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_color_grading:" .. tostring(exposure) .. ":" .. tostring(temperature) .. ":" .. tostring(tint) .. ":" .. tostring(hue) .. ":" .. tostring(post_saturation) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_color_grading(duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("reset_color_grading:" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_chromatic_aberration(intensity, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_chromatic_aberration:" .. tostring(intensity) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_chromatic_aberration(duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("reset_chromatic_aberration:" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_dof(focal_distance, aperture, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_dof:" .. tostring(focal_distance) .. ":" .. tostring(aperture) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_dof(duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("reset_dof:" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_vignette(intensity, smoothness, roundness, color, duration, easing)
+    smoothness = smoothness or 0.5
+    roundness = roundness or 1.0
+    color = color or {r = 0, g = 0, b = 0}
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_vignette:" .. tostring(intensity) .. ":" .. tostring(smoothness) .. ":" .. tostring(roundness) .. ":" .. tostring(color.r) .. ":" .. tostring(color.g) .. ":" .. tostring(color.b) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_scanlines(intensity, count, speed, duration, easing)
+    count = count or 400
+    speed = speed or 0
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_scanlines:" .. tostring(intensity) .. ":" .. tostring(count) .. ":" .. tostring(speed) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_film_grain(intensity, speed, duration, easing)
+    speed = speed or 1
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_film_grain:" .. tostring(intensity) .. ":" .. tostring(speed) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_fade(color, intensity, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_fade:" .. tostring(color.r) .. ":" .. tostring(color.g) .. ":" .. tostring(color.b) .. ":" .. tostring(intensity) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_pixelation(cell_size, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_pixelation:" .. tostring(cell_size) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_color_tint(color, intensity, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_color_tint:" .. tostring(color.r) .. ":" .. tostring(color.g) .. ":" .. tostring(color.b) .. ":" .. tostring(intensity) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_color_adjust(brightness, contrast, saturation, invert, duration, easing)
+    invert = invert or 0
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_color_adjust:" .. tostring(brightness) .. ":" .. tostring(contrast) .. ":" .. tostring(saturation) .. ":" .. tostring(invert) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.reset_custom_fx(duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("reset_custom_fx:" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.spawn_shockwave(pos, radius, duration, intensity, thickness, chromatic)
+    intensity = intensity or 0.04
+    thickness = thickness or 40
+    chromatic = chromatic or 0.005
+    coroutine.yield("spawn_shockwave:" .. tostring(pos.x) .. ":" .. tostring(pos.y) .. ":" .. tostring(radius) .. ":" .. tostring(duration) .. ":" .. tostring(intensity) .. ":" .. tostring(thickness) .. ":" .. tostring(chromatic))
+end
+
+function scene.set_sine_wave(amp_x, amp_y, freq, speed, duration, easing)
+    freq = freq or 20
+    speed = speed or 3
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_sine_wave:" .. tostring(amp_x) .. ":" .. tostring(amp_y) .. ":" .. tostring(freq) .. ":" .. tostring(speed) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_swirl(angle, radius, center_x, center_y, duration, easing)
+    radius = radius or 0.5
+    center_x = center_x or 0.5
+    center_y = center_y or 0.5
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_swirl:" .. tostring(angle) .. ":" .. tostring(radius) .. ":" .. tostring(center_x) .. ":" .. tostring(center_y) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_lens_distortion(intensity, zoom, duration, easing)
+    zoom = zoom or 1
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_lens_distortion:" .. tostring(intensity) .. ":" .. tostring(zoom) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_shake(intensity, speed, duration, easing)
+    speed = speed or 1
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_shake:" .. tostring(intensity) .. ":" .. tostring(speed) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_zoom(amount, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_zoom:" .. tostring(amount) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_rotation(angle, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_rotation:" .. tostring(angle) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_cinema_bars(size, color, duration, easing)
+    color = color or {r = 0, g = 0, b = 0}
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_cinema_bars:" .. tostring(size) .. ":" .. tostring(color.r) .. ":" .. tostring(color.g) .. ":" .. tostring(color.b) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
+
+function scene.set_posterize(levels, duration, easing)
+    duration = duration or 0
+    easing = easing or "Linear"
+    scene._do("set_posterize:" .. tostring(levels) .. ":" .. tostring(duration) .. ":" .. easing, duration)
+end
 "#;
 
 /// Parse a yielded command string into a LuaCommand.
 fn parse_yield(yield_str: &str) -> YieldAction {
-    let parts: Vec<&str> = yield_str.splitn(14, ':').collect();
+    let parts: Vec<&str> = yield_str.splitn(20, ':').collect();
     match parts[0] {
         "wait" => {
             let secs: f32 = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0.0);
@@ -204,15 +456,25 @@ fn parse_yield(yield_str: &str) -> YieldAction {
             YieldAction::RunYarnNode {
                 node: parts[1].to_string(),
                 blocking,
-                speaker: None,
+                speaker_map: Vec::new(),
             }
         }
         "run_yarn_node_at" if parts.len() >= 3 => {
             let blocking = parts.get(3).map(|s| *s == "true").unwrap_or(true);
+            // Parse speaker map from "CharName=instance|CharName2=instance2"
+            let speaker_map: Vec<(String, String)> = parts[2].split('|')
+                .filter(|s| !s.is_empty())
+                .filter_map(|pair| {
+                    let mut kv = pair.splitn(2, '=');
+                    let k = kv.next()?.to_string();
+                    let v = kv.next()?.to_string();
+                    Some((k, v))
+                })
+                .collect();
             YieldAction::RunYarnNode {
                 node: parts[1].to_string(),
                 blocking,
-                speaker: Some(parts[2].to_string()),
+                speaker_map,
             }
         }
         "set_time_of_day" if parts.len() >= 2 => {
@@ -240,6 +502,71 @@ fn parse_yield(yield_str: &str) -> YieldAction {
                 cmd: LuaCommand::PlayBgm {
                     asset_path: parts[1].to_string(),
                     fade_in: fade,
+                },
+                wait_movement: None,
+            }
+        }
+        "set_ambient" if parts.len() >= 5 => {
+            use super::event_bridge::LuaCommand;
+            let r: f32 = parts[1].parse().unwrap_or(1.0);
+            let g: f32 = parts[2].parse().unwrap_or(1.0);
+            let b: f32 = parts[3].parse().unwrap_or(1.0);
+            let intensity: f32 = parts[4].parse().unwrap_or(1.0);
+            YieldAction::Command {
+                cmd: LuaCommand::SetAmbient {
+                    color: Color::srgb(r, g, b),
+                    intensity,
+                },
+                wait_movement: None,
+            }
+        }
+        "camera_pan" if parts.len() >= 4 => {
+            use super::event_bridge::LuaCommand;
+            let x: f32 = parts[1].parse().unwrap_or(0.0);
+            let y: f32 = parts[2].parse().unwrap_or(0.0);
+            let duration: f32 = parts[3].parse().unwrap_or(1.0);
+            YieldAction::Command {
+                cmd: LuaCommand::CameraPan {
+                    target: Vec2::new(x, y),
+                    duration,
+                },
+                wait_movement: None,
+            }
+        }
+        "camera_shake" if parts.len() >= 3 => {
+            use super::event_bridge::LuaCommand;
+            let intensity: f32 = parts[1].parse().unwrap_or(5.0);
+            let duration: f32 = parts[2].parse().unwrap_or(0.5);
+            YieldAction::Command {
+                cmd: LuaCommand::CameraShake {
+                    intensity,
+                    duration,
+                },
+                wait_movement: None,
+            }
+        }
+        "spawn_particle" if parts.len() >= 4 => {
+            use super::event_bridge::LuaCommand;
+            let x: f32 = parts[2].parse().unwrap_or(0.0);
+            let y: f32 = parts[3].parse().unwrap_or(0.0);
+            YieldAction::Command {
+                cmd: LuaCommand::SpawnParticle {
+                    def_id: parts[1].to_string(),
+                    position: Vec2::new(x, y),
+                },
+                wait_movement: None,
+            }
+        }
+        "screen_flash" if parts.len() >= 5 => {
+            use super::event_bridge::LuaCommand;
+            let r: f32 = parts[1].parse().unwrap_or(1.0);
+            let g: f32 = parts[2].parse().unwrap_or(1.0);
+            let b: f32 = parts[3].parse().unwrap_or(1.0);
+            let duration: f32 = parts[4].parse().unwrap_or(0.3);
+            YieldAction::Command {
+                cmd: LuaCommand::ScreenFlash {
+                    color: Color::srgb(r, g, b),
+                    duration,
                 },
                 wait_movement: None,
             }
@@ -272,6 +599,28 @@ fn parse_yield(yield_str: &str) -> YieldAction {
             // Parallel block requesting a tick — resume immediately with dt.
             YieldAction::ParallelTick
         }
+        // ── Post FX commands — all fire-and-forget via generic PostFx variant ──
+        "set_bloom" | "reset_bloom" | "set_tonemapping" | "set_color_grading"
+        | "reset_color_grading" | "set_chromatic_aberration" | "reset_chromatic_aberration"
+        | "set_dof" | "reset_dof" | "set_vignette" | "set_scanlines" | "set_film_grain"
+        | "set_fade" | "set_pixelation" | "set_color_tint" | "set_color_adjust"
+        | "set_sine_wave" | "set_swirl" | "set_lens_distortion" | "set_shake"
+        | "set_zoom" | "set_rotation" | "set_cinema_bars" | "set_posterize"
+        | "reset_custom_fx" | "spawn_shockwave" => {
+            use super::event_bridge::LuaCommand;
+            let cmd_name = parts[0].to_string();
+            let float_args: Vec<f32> = parts[1..].iter()
+                .filter_map(|s| s.parse::<f32>().ok())
+                .collect();
+            let easing = parts[1..].iter()
+                .find(|s| s.parse::<f32>().is_err() && !s.is_empty())
+                .unwrap_or(&"Linear")
+                .to_string();
+            YieldAction::Command {
+                cmd: LuaCommand::PostFx { command: cmd_name, args: float_args, easing },
+                wait_movement: None,
+            }
+        }
         _ => {
             warn!("Unknown Lua yield: {yield_str}");
             YieldAction::None
@@ -286,7 +635,7 @@ enum YieldAction {
     /// Call another event by name as a blocking sub-script.
     CallScript(String),
     /// Start a Yarn Spinner dialogue node and wait for it to complete.
-    RunYarnNode { node: String, blocking: bool, speaker: Option<String> },
+    RunYarnNode { node: String, blocking: bool, speaker_map: Vec<(String, String)> },
     /// Parallel block requesting a tick — resume immediately with delta time.
     ParallelTick,
     Command {
@@ -302,13 +651,17 @@ pub fn start_pending_events(
     vm: Res<super::LuaVm>,
     registry: Res<SceneActionRegistry>,
 ) {
-    let events: Vec<SceneEvent> = runner.pending_start.drain(..).collect();
-    if events.is_empty() {
+    let new_events: Vec<SceneEvent> = runner.pending_start.drain(..).collect();
+    let triggered: Vec<(String, EventTrigger)> = runner.pending_trigger.drain(..).collect();
+
+    if new_events.is_empty() && triggered.is_empty() {
         return;
     }
 
-    // Update all_events so call_script can find Script-triggered events
-    runner.all_events = events.clone();
+    // If new events were pushed (map load / save), update the master list
+    if !new_events.is_empty() {
+        runner.all_events = new_events.clone();
+    }
 
     // Ensure scene API is loaded
     if let Err(e) = vm.lua.load(LUA_SCENE_API).exec() {
@@ -316,7 +669,8 @@ pub fn start_pending_events(
         return;
     }
 
-    for event in &events {
+    // Start AutoRun / Parallel events from new_events
+    for event in &new_events {
         if !event.enabled {
             continue;
         }
@@ -326,16 +680,31 @@ pub fn start_pending_events(
                     continue;
                 }
                 runner.auto_run_fired.push(event.id.clone());
-                start_coroutine(&vm.lua, &mut runner, event, &registry, true);
+                start_coroutine(&vm.lua, &mut runner, event, &registry, true, false);
             }
             EventTrigger::Parallel => {
                 if runner.coroutines.iter().any(|c| c.event_id == event.id && !c.finished) {
                     continue;
                 }
-                start_coroutine(&vm.lua, &mut runner, event, &registry, false);
+                start_coroutine(&vm.lua, &mut runner, event, &registry, false, true);
             }
             _ => {}
         }
+    }
+
+    // Start triggered events (Interact / Touch)
+    for (event_id, trigger) in &triggered {
+        let Some(event) = runner.all_events.iter().find(|e| e.id == *event_id).cloned() else {
+            warn!("Triggered event not found: {event_id}");
+            continue;
+        };
+        // Don't start duplicates
+        if runner.coroutines.iter().any(|c| c.event_id == *event_id && !c.finished) {
+            continue;
+        }
+        // Interact/Touch events block like AutoRun (sequential, pauses other events)
+        let blocking = matches!(trigger, EventTrigger::Interact | EventTrigger::Touch);
+        start_coroutine(&vm.lua, &mut runner, &event, &registry, blocking, false);
     }
 }
 
@@ -345,9 +714,11 @@ fn start_coroutine(
     event: &SceneEvent,
     registry: &SceneActionRegistry,
     blocking: bool,
+    parallel: bool,
 ) {
     let lua_code = super::scene_event::generate_lua(event, registry);
-    info!("Starting event '{}' ({})\n{}", event.name, if blocking { "blocking" } else { "parallel" }, &lua_code);
+    let kind = if blocking { "blocking" } else if parallel { "parallel" } else { "normal" };
+    info!("Starting event '{}' ({kind})\n{}", event.name, &lua_code);
 
     // Load the script (defines `run` function)
     if let Err(e) = lua.load(&lua_code).exec() {
@@ -390,6 +761,7 @@ fn start_coroutine(
         wait_for_script: None,
         wait_for_dialogue: false,
         blocking,
+        parallel,
         finished: false,
     });
 }
@@ -414,14 +786,16 @@ pub fn tick_coroutines(
     // Collect script calls to spawn after iteration.
     let mut scripts_to_start: Vec<String> = Vec::new();
     // Collect yarn node requests to spawn after iteration.
-    let mut yarn_nodes_to_start: Vec<(String, bool, Option<String>)> = Vec::new();
+    let mut yarn_nodes_to_start: Vec<(String, bool, Vec<(String, String)>)> = Vec::new();
 
     let num = runner.coroutines.len();
     for i in 0..num {
         if runner.coroutines[i].finished {
             continue;
         }
-        if has_blocker && !runner.coroutines[i].blocking {
+        // When a blocking coroutine (AutoRun) is active, pause everything
+        // except the blocker itself and parallel events.
+        if has_blocker && !runner.coroutines[i].blocking && !runner.coroutines[i].parallel {
             continue;
         }
         if runner.coroutines[i].wait_timer > 0.0 {
@@ -508,9 +882,9 @@ pub fn tick_coroutines(
                             runner.coroutines[i].wait_for_script = Some(name.clone());
                             scripts_to_start.push(name.clone());
                         }
-                        YieldAction::RunYarnNode { node, blocking, speaker } => {
+                        YieldAction::RunYarnNode { node, blocking, speaker_map } => {
                             runner.coroutines[i].wait_for_dialogue = true;
-                            yarn_nodes_to_start.push((node, blocking, speaker));
+                            yarn_nodes_to_start.push((node, blocking, speaker_map));
                         }
                         YieldAction::ParallelTick => {
                             // Parallel block wants to resume next frame — no timer needed.
@@ -588,6 +962,7 @@ pub fn tick_coroutines(
                     wait_for_script: None,
                     wait_for_dialogue: false,
                     blocking: false,
+                    parallel: false,
                     finished: false,
                 });
             } else {
@@ -618,8 +993,8 @@ pub fn start_pending_yarn_nodes(
     }
 
     // Start the first pending node (queue the rest)
-    let (node, blocking, speaker) = runner.pending_yarn_nodes.remove(0);
-    crate::dialogue::start_yarn_node(&mut commands, &project, &node, blocking, speaker);
+    let (node, blocking, speaker_map) = runner.pending_yarn_nodes.remove(0);
+    crate::dialogue::start_yarn_node(&mut commands, &project, &node, blocking, speaker_map);
 }
 
 /// System: when DialogueState is removed, clear the wait_for_dialogue flag
@@ -634,6 +1009,87 @@ pub fn clear_dialogue_wait(
     for co in &mut runner.coroutines {
         if co.wait_for_dialogue {
             co.wait_for_dialogue = false;
+        }
+    }
+}
+
+/// Interaction radius squared (avoids sqrt per object per frame).
+const INTERACT_RADIUS_SQ: f32 = 52.0 * 52.0;
+/// Touch radius squared.
+const TOUCH_RADIUS_SQ: f32 = 24.0 * 24.0;
+
+/// System: detect player proximity to placed objects and fire Interact (action key)
+/// or Touch (overlap) events.
+pub fn detect_interactions(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut runner: ResMut<SceneRunner>,
+    player_q: Query<&Transform, With<crate::dev_scene::Player>>,
+    placed_q: Query<(&Transform, &crate::tile_editor::state::PlacedObject), Without<crate::dev_scene::Player>>,
+) {
+    let action_pressed = keyboard.just_pressed(KeyCode::Space);
+
+    // Don't trigger new events while a blocking one is running
+    if runner.has_blocker() {
+        if action_pressed {
+            debug!("detect_interactions: blocked by running coroutine");
+        }
+        return;
+    }
+    // Nothing to trigger if no events are loaded
+    if runner.all_events.is_empty() {
+        if action_pressed {
+            debug!("detect_interactions: no events loaded");
+        }
+        return;
+    }
+
+    let Ok(player_tf) = player_q.single() else {
+        if action_pressed {
+            debug!("detect_interactions: no player entity");
+        }
+        return;
+    };
+    let player_pos = player_tf.translation.truncate();
+
+    if action_pressed {
+        debug!("detect_interactions: Space pressed, player at {:?}, checking {} objects", player_pos, placed_q.iter().count());
+    }
+
+    for (tf, po) in placed_q.iter() {
+        let dist_sq = player_pos.distance_squared(tf.translation.truncate());
+
+        // Skip objects too far for either trigger
+        if dist_sq > INTERACT_RADIUS_SQ {
+            continue;
+        }
+
+        // Use the object's name if set, otherwise "#id" to match the convention
+        // used by the scene builder for trigger_target references.
+        let name_owned;
+        let name = match po.name.as_deref() {
+            Some(n) => n,
+            None => {
+                name_owned = format!("#{}", po.sidecar_id);
+                &name_owned
+            }
+        };
+
+        if action_pressed {
+            let dist = dist_sq.sqrt();
+            debug!("  object '{name}' at dist {dist:.1}, trigger_target matches: {:?}",
+                runner.all_events.iter()
+                    .filter(|e| e.trigger == EventTrigger::Interact && e.trigger_target.as_deref() == Some(name))
+                    .map(|e| &e.name)
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        if dist_sq < TOUCH_RADIUS_SQ {
+            runner.trigger_for_instance(name, EventTrigger::Touch);
+        }
+
+        if action_pressed {
+            runner.trigger_for_instance(name, EventTrigger::Interact);
         }
     }
 }

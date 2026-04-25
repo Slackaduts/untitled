@@ -1,0 +1,27 @@
+-- Event: FeatureTest
+-- Trigger: parallel
+
+function run()
+  scene.set_ambient({r = 1, g = 0.9, b = 0.7}, 1.5)
+  scene.camera_shake(8, 0.6)
+  scene.screen_flash({r = 1, g = 1, b = 1}, 0.4)
+  scene.wait(0.3)
+  scene.set_cinema_bars(0.1, {r = 0, g = 0, b = 0}, 1, "QuadraticInOut")
+  scene.set_bloom(0.4, 0.8, 0.3, 1, "SineInOut")
+  scene.wait(1.5)
+  scene.set_sine_wave(0.005, 0.003, 15, 3, 1, "SineInOut")
+  scene.wait(2)
+  scene.set_sine_wave(0, 0, 15, 3, 1, "SineOut")
+  scene.set_swirl(3, 0.8, 0.5, 0.5, 1.5, "QuadraticIn")
+  scene.set_swirl(0, 0.8, 0.5, 0.5, 1.5, "QuadraticOut")
+  scene.set_posterize(6, 0.5, "Linear")
+  scene.wait(1.5)
+  scene.set_posterize(0, 0.5, "Linear")
+  scene.set_lens_distortion(0.8, 1, 0.8, "QuadraticInOut")
+  scene.set_lens_distortion(0, 1, 0.8, "QuadraticInOut")
+  scene.set_zoom(1.3, 1, "SineInOut")
+  scene.set_zoom(1, 1, "SineInOut")
+  scene.reset_fx("Bloom", 0.5, "Linear")
+  scene.reset_fx("All Custom FX", 1, "SineOut")
+  scene.set_ambient({r = 1, g = 1, b = 1}, 1)
+end

@@ -22,7 +22,8 @@ pub struct SceneBuilderPlugin;
 
 impl Plugin for SceneBuilderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<state::SceneBuilderState>();
+        app.init_resource::<state::SceneBuilderState>()
+            .add_systems(Update, auto_load_events);
 
         #[cfg(feature = "dev_tools")]
         {
@@ -47,6 +48,32 @@ impl Plugin for SceneBuilderPlugin {
             );
         }
     }
+}
+
+/// Auto-load events when a map is loaded, pushing them to the runner so
+/// AutoRun/Parallel start and Interact/Touch/Script triggers are registered.
+fn auto_load_events(
+    mut state: ResMut<state::SceneBuilderState>,
+    current_map: Res<crate::map::loader::CurrentMap>,
+    mut scene_runner: ResMut<crate::scripting::runner::SceneRunner>,
+) {
+    let Some(map_path) = &current_map.path else {
+        return;
+    };
+    // Only load once per map
+    if state.loaded_for_map.as_ref() == Some(map_path) {
+        return;
+    }
+    let file = crate::scripting::scene_event::load_events(map_path)
+        .unwrap_or_default();
+    state.events = file.events.clone();
+    state.selected_event = None;
+    state.loaded_for_map = Some(map_path.clone());
+    state.dirty = false;
+
+    // Push all events to runner (it starts AutoRun/Parallel and populates all_events)
+    scene_runner.clear_auto_run();
+    scene_runner.pending_start.extend(file.events);
 }
 
 #[cfg(feature = "dev_tools")]
@@ -123,7 +150,7 @@ fn scene_builder_ui(
                     ui.set_min_width(300.0);
                     ui.set_max_width(400.0);
                     ui.set_min_height(panel_height);
-                    event_editor_panel(ui, &mut state, &action_registry, &tile_state, &yarn_nodes);
+                    event_editor_panel(ui, &mut state, &action_registry, &tile_state, &yarn_nodes, current_map.path.as_deref());
                 });
 
                 ui.separator();
@@ -262,6 +289,7 @@ fn event_editor_panel(
     registry: &crate::scripting::scene_action::SceneActionRegistry,
     tile_state: &crate::tile_editor::state::TileEditorState,
     yarn_nodes: &[String],
+    current_map_path: Option<&str>,
 ) {
     use bevy_egui::egui;
     use crate::scripting::scene_event::*;
@@ -378,7 +406,7 @@ fn event_editor_panel(
                         // Argument widgets
                         if let Some(def) = registry.get(&action.action_id) {
                             for arg_def in &def.args {
-                                if render_arg_widget(ui, ai, arg_def, &mut action.args, tile_state, &mut state.picking_position, yarn_nodes) {
+                                if render_arg_widget(ui, ai, arg_def, &mut action.args, tile_state, &mut state.picking_position, yarn_nodes, current_map_path) {
                                     state.dirty = true;
                                 }
                             }
@@ -443,6 +471,7 @@ fn render_arg_widget(
     tile_state: &crate::tile_editor::state::TileEditorState,
     picking_position: &mut Option<(usize, String, bool)>,
     yarn_nodes: &[String],
+    current_map_path: Option<&str>,
 ) -> bool {
     use bevy_egui::egui;
     use crate::scripting::scene_action::ArgType;
@@ -652,6 +681,64 @@ fn render_arg_widget(
                         }
                     });
             }
+            ArgType::SpeakerMap => {
+                // Look up the selected yarn node from the sibling "node" arg
+                let node_name = args.get("node")
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+
+                if node_name.is_empty() {
+                    ui.label("Select a yarn node first");
+                } else {
+                    // Parse speakers from the yarn file
+                    let speakers = current_map_path
+                        .map(|p| crate::scripting::scene_event::extract_yarn_speakers(p, &node_name))
+                        .unwrap_or_default();
+
+                    if speakers.is_empty() {
+                        ui.label("No speakers found in node");
+                    } else {
+                        // Get or create the speaker map
+                        let mut pairs: Vec<[String; 2]> = match args.get(&key) {
+                            Some(ActionArgValue::SpeakerMap(p)) => p.clone(),
+                            _ => Vec::new(),
+                        };
+
+                        // Ensure all speakers have an entry
+                        for speaker in &speakers {
+                            if !pairs.iter().any(|[s, _]| s == speaker) {
+                                pairs.push([speaker.clone(), String::new()]);
+                            }
+                        }
+                        // Remove entries for speakers no longer in the node
+                        pairs.retain(|[s, _]| speakers.contains(s));
+
+                        let mut map_changed = false;
+                        for pair in &mut pairs {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{}:", pair[0]));
+                                let display = if pair[1].is_empty() { "Select..." } else { &pair[1] };
+                                egui::ComboBox::from_id_salt(format!("speaker_{}_{}", arg_def.name, pair[0]))
+                                    .selected_text(display)
+                                    .show_ui(ui, |ui| {
+                                        for obj in &tile_state.placed_objects {
+                                            let (ref_name, label) = instance_label(obj);
+                                            if ui.selectable_label(pair[1] == ref_name, &label).clicked() {
+                                                pair[1] = ref_name;
+                                                map_changed = true;
+                                            }
+                                        }
+                                    });
+                            });
+                        }
+
+                        if map_changed {
+                            changed = true;
+                        }
+                        args.insert(key, ActionArgValue::SpeakerMap(pairs));
+                    }
+                }
+            }
         }
     });
 
@@ -719,12 +806,9 @@ fn lua_preview_panel(
                 }
                 state.dirty = false;
 
-                // Start AutoRun/Parallel events immediately
-                scene_runner.pending_start.extend(
-                    state.events.iter()
-                        .filter(|e| e.enabled && matches!(e.trigger, scene_event::EventTrigger::AutoRun | scene_event::EventTrigger::Parallel))
-                        .cloned()
-                );
+                // Push all events so runner updates all_events (for Interact/Touch/Script).
+                // The runner only starts coroutines for AutoRun/Parallel from this list.
+                scene_runner.pending_start.extend(state.events.iter().cloned());
             }
         }
         if ui.button("Save All Lua").on_hover_text("Generate and save Lua for all events").clicked() {
@@ -750,12 +834,9 @@ fn lua_preview_panel(
                 }
                 state.dirty = false;
 
-                // Start AutoRun/Parallel events immediately
-                scene_runner.pending_start.extend(
-                    state.events.iter()
-                        .filter(|e| e.enabled && matches!(e.trigger, scene_event::EventTrigger::AutoRun | scene_event::EventTrigger::Parallel))
-                        .cloned()
-                );
+                // Push all events so runner updates all_events (for Interact/Touch/Script).
+                // The runner only starts coroutines for AutoRun/Parallel from this list.
+                scene_runner.pending_start.extend(state.events.iter().cloned());
             }
         }
     });
